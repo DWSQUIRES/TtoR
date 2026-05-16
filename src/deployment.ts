@@ -8,6 +8,10 @@ import { XCookieScraper } from "./scraper/xCookieScraper.js";
 import type { TimelineScraper } from "./types.js";
 
 export function loadVercelConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  return loadConfig(env);
+}
+
+export function loadVercelPollingConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const config = loadConfig(env);
 
   if (!config.xCookieHeader && (!config.xAuthToken || !config.xCsrfToken)) {
@@ -18,6 +22,18 @@ export function loadVercelConfig(env: NodeJS.ProcessEnv = process.env): AppConfi
   }
 
   return config;
+}
+
+export function createVercelReadRuntime(env: NodeJS.ProcessEnv = process.env): {
+  config: AppConfig;
+  repository: PostRepository;
+} {
+  const config = loadVercelConfig(env);
+
+  return {
+    config,
+    repository: PostgresRepository.fromEnv(env)
+  };
 }
 
 export function createMemeSignalService(
@@ -57,7 +73,7 @@ export function createVercelRuntime(env: NodeJS.ProcessEnv = process.env): {
   scraper: TimelineScraper;
   memeSignalService: MemeSignalService | null;
 } {
-  const config = loadVercelConfig(env);
+  const config = loadVercelPollingConfig(env);
   const logger = createLogger(config.logLevel);
   const repository = PostgresRepository.fromEnv(env);
 

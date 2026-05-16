@@ -20,3 +20,12 @@ export function parseBoundedInteger(value: string | null, fallback: number, min:
 
   return Math.max(min, Math.min(max, parsed));
 }
+
+export function errorJson(error: unknown, status = 500): Response {
+  return json(
+    {
+      error: error instanceof Error ? error.message : "Internal Server Error"
+    },
+    { status }
+  );
+}

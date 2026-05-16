@@ -1,10 +1,11 @@
-import { createVercelRuntime } from "../../src/deployment.js";
-import { json } from "../../src/http.js";
+import { createVercelReadRuntime } from "../../src/deployment.js";
+import { errorJson, json } from "../../src/http.js";
 
 export async function GET(request: Request): Promise<Response> {
-  const runtime = createVercelRuntime();
+  let runtime: ReturnType<typeof createVercelReadRuntime> | null = null;
 
   try {
+    runtime = createVercelReadRuntime();
     const url = new URL(request.url);
     const sinceDetectedAt = url.searchParams.get("since_detected_at");
     const sinceCreatedAt = url.searchParams.get("since_created_at");
@@ -29,7 +30,9 @@ export async function GET(request: Request): Promise<Response> {
       : await runtime.repository.getPostsSinceDetectedAt(normalizedSince);
 
     return json(posts);
+  } catch (error) {
+    return errorJson(error);
   } finally {
-    await runtime.repository.close();
+    await runtime?.repository.close();
   }
 }

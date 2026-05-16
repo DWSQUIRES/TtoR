@@ -1,12 +1,15 @@
-import { createVercelRuntime } from "../src/deployment.js";
-import { json } from "../src/http.js";
+import { createVercelReadRuntime } from "../src/deployment.js";
+import { errorJson, json } from "../src/http.js";
 
 export async function GET(): Promise<Response> {
-  const runtime = createVercelRuntime();
+  let runtime: ReturnType<typeof createVercelReadRuntime> | null = null;
 
   try {
+    runtime = createVercelReadRuntime();
     return json(await runtime.repository.getHealthSnapshot(runtime.config));
+  } catch (error) {
+    return errorJson(error);
   } finally {
-    await runtime.repository.close();
+    await runtime?.repository.close();
   }
 }

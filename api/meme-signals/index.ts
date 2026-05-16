@@ -1,15 +1,18 @@
-import { createVercelRuntime } from "../../src/deployment.js";
-import { json, parseBoundedInteger } from "../../src/http.js";
+import { createVercelReadRuntime } from "../../src/deployment.js";
+import { errorJson, json, parseBoundedInteger } from "../../src/http.js";
 
 export async function GET(request: Request): Promise<Response> {
-  const runtime = createVercelRuntime();
+  let runtime: ReturnType<typeof createVercelReadRuntime> | null = null;
 
   try {
+    runtime = createVercelReadRuntime();
     const url = new URL(request.url);
     const minScore = parseBoundedInteger(url.searchParams.get("min_score"), runtime.config.memeSignalThreshold, 0, 100);
     const limit = parseBoundedInteger(url.searchParams.get("limit"), 50, 1, 200);
     return json(await runtime.repository.getMemeSignals({ minScore, limit }));
+  } catch (error) {
+    return errorJson(error);
   } finally {
-    await runtime.repository.close();
+    await runtime?.repository.close();
   }
 }
