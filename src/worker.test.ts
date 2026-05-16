@@ -36,6 +36,8 @@ function buildConfig(): AppConfig {
     xBearerToken: null,
     xUserTweetsUrl: null,
     xCookieHeader: null,
+    xClientTransactionId: null,
+    xUserAgent: null,
     aiEnabled: false,
     openaiApiKey: null,
     openaiBaseUrl: null,

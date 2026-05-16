@@ -87,7 +87,9 @@ export function createVercelRuntime(env: NodeJS.ProcessEnv = process.env): {
         cookieHeader: config.xCookieHeader ?? undefined,
         guestToken: config.xGuestToken ?? undefined,
         bearerToken: config.xBearerToken ?? undefined,
-        userTweetsUrl: config.xUserTweetsUrl ?? undefined
+        userTweetsUrl: config.xUserTweetsUrl ?? undefined,
+        clientTransactionId: config.xClientTransactionId ?? undefined,
+        userAgent: config.xUserAgent ?? undefined
       },
       logger
     ),

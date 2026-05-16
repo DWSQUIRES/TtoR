@@ -10,11 +10,13 @@ interface XCookieScraperOptions {
   guestToken?: string;
   bearerToken?: string;
   userTweetsUrl?: string;
+  clientTransactionId?: string;
+  userAgent?: string;
 }
 
 const defaultBearerToken =
-  "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOZDgxXBXgDO4N7rP0%3D" +
-  "q4poXjG0bF2R8G6R4rxM8cW4Z1c5O8K4lN7q9l2g";
+  "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D" +
+  "1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
 
 function findUserTimelineUrl(html: string): string | null {
   const matches = html.matchAll(/https:\/\/x\.com\/i\/api\/graphql\/[^"'\\]+\/UserTweets\?[^"'\\]+/g);
@@ -105,12 +107,23 @@ export class XCookieScraper implements TimelineScraper {
 
     return {
       accept: "*/*",
+      "accept-language": "en-US,en;q=0.9",
       authorization: `Bearer ${this.options.bearerToken ?? defaultBearerToken}`,
       cookie,
+      "content-type": "application/json",
+      priority: "u=1, i",
       referer,
+      "sec-ch-ua": '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"',
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": '"Linux"',
+      "sec-fetch-dest": "empty",
+      "sec-fetch-mode": "cors",
+      "sec-fetch-site": "same-origin",
       "user-agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        this.options.userAgent ??
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
+          "(KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+      ...(this.options.clientTransactionId ? { "x-client-transaction-id": this.options.clientTransactionId } : {}),
       "x-csrf-token": this.options.ct0 ?? this.extractCookieValue(cookie, "ct0") ?? "",
       "x-twitter-active-user": "yes",
       "x-twitter-auth-type": "OAuth2Session",

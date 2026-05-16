@@ -22,6 +22,8 @@ export interface AppConfig {
   xBearerToken: string | null;
   xUserTweetsUrl: string | null;
   xCookieHeader: string | null;
+  xClientTransactionId: string | null;
+  xUserAgent: string | null;
   aiEnabled: boolean;
   openaiApiKey: string | null;
   openaiBaseUrl: string | null;
@@ -132,6 +134,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     xBearerToken: env.X_BEARER_TOKEN ?? null,
     xUserTweetsUrl: env.X_USER_TWEETS_URL ?? null,
     xCookieHeader: env.X_COOKIE_HEADER ?? null,
+    xClientTransactionId: env.X_CLIENT_TRANSACTION_ID ?? null,
+    xUserAgent: env.X_USER_AGENT ?? null,
     aiEnabled: parseBoolean(env.AI_ENABLED, false),
     openaiApiKey: env.OPENAI_API_KEY ?? null,
     openaiBaseUrl: env.OPENAI_BASE_URL ?? null,
