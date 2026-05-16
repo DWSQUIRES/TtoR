@@ -1,18 +1,9 @@
 import { createLogger } from "../../src/logger.js";
 import { createVercelRuntime, isAuthorizedCronRequest } from "../../src/deployment.js";
+import { json } from "../../src/http.js";
 import { PollingWorker } from "../../src/worker.js";
 
 export const maxDuration = 60;
-
-function json(body: unknown, init?: ResponseInit): Response {
-  return new Response(JSON.stringify(body, null, 2), {
-    ...init,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      ...(init?.headers ?? {})
-    }
-  });
-}
 
 export async function GET(request: Request): Promise<Response> {
   const runtime = createVercelRuntime();
@@ -23,7 +14,13 @@ export async function GET(request: Request): Promise<Response> {
       return json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const worker = new PollingWorker(runtime.config, runtime.repository, runtime.scraper, logger);
+    const worker = new PollingWorker(
+      runtime.config,
+      runtime.repository,
+      runtime.scraper,
+      logger,
+      runtime.memeSignalService
+    );
     const summary = await worker.runCycle();
     return json(summary);
   } finally {

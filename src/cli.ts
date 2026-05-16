@@ -1,6 +1,8 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import "dotenv/config";
 
+import { createMemeSignalService } from "./deployment.js";
 import { startApiServer } from "./api.js";
 import { ensureRuntimeDirs, loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
@@ -53,7 +55,8 @@ async function runPollOnceCommand(): Promise<void> {
   const logger = createLogger(config.logLevel);
   const repository = Repository.open(config.databasePath);
   const scraper = new XProfileScraper(config, logger);
-  const worker = new PollingWorker(config, repository, scraper, logger);
+  const memeSignalService = createMemeSignalService(config, repository, logger);
+  const worker = new PollingWorker(config, repository, scraper, logger, memeSignalService);
 
   try {
     const summary = await worker.runCycle();
@@ -140,7 +143,8 @@ async function runWorkerCommand(withApi: boolean): Promise<void> {
   const logger = createLogger(config.logLevel);
   const repository = Repository.open(config.databasePath);
   const scraper = new XProfileScraper(config, logger);
-  const worker = new PollingWorker(config, repository, scraper, logger);
+  const memeSignalService = createMemeSignalService(config, repository, logger);
+  const worker = new PollingWorker(config, repository, scraper, logger, memeSignalService);
   const apiServer = withApi ? await startApiServer(repository, config, logger) : null;
 
   const shutdown = async (): Promise<void> => {

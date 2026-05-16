@@ -2,7 +2,15 @@ import postgres, { type Sql, type TransactionSql } from "postgres";
 
 import type { AppConfig } from "./config.js";
 import { getRepositoryHealthSnapshot, type PostRepository } from "./repository.js";
-import type { HealthSnapshot, PollRunInput, PollRunRecord, StoredPost } from "./types.js";
+import type {
+  HealthSnapshot,
+  MemeSignalAnalysisInput,
+  MemeSignalAnalysisPayload,
+  MemeSignalAnalysisRecord,
+  PollRunInput,
+  PollRunRecord,
+  StoredPost
+} from "./types.js";
 
 function parseJson<T>(value: unknown, fallback: T): T {
   if (value === null || value === undefined) {
@@ -54,6 +62,35 @@ function rowToPollRun(row: Record<string, unknown>): PollRunRecord {
     errorMessage: row.error_message ? String(row.error_message) : null,
     latestPostId: row.latest_post_id ? String(row.latest_post_id) : null,
     metadata: parseJson<Record<string, unknown>>(row.metadata_json, {})
+  };
+}
+
+const emptyMemeSignalPayload: MemeSignalAnalysisPayload = {
+  hasMemecoinSignal: false,
+  signalScore: 0,
+  confidence: "low",
+  narrative: "",
+  whySignal: "",
+  searchTerms: [],
+  possibleNames: [],
+  entities: [],
+  urgency: "low",
+  sensitivityFlags: [],
+  recommendedAction: "ignore"
+};
+
+function rowToMemeSignalAnalysis(row: Record<string, unknown>): MemeSignalAnalysisRecord {
+  const payload = parseJson<MemeSignalAnalysisPayload>(row.analysis_json, emptyMemeSignalPayload);
+
+  return {
+    postId: String(row.post_id),
+    status: String(row.status) as MemeSignalAnalysisRecord["status"],
+    model: String(row.model),
+    promptVersion: String(row.prompt_version),
+    rawPayload: parseJson<Record<string, unknown>>(row.raw_payload_json, {}),
+    errorMessage: row.error_message ? String(row.error_message) : null,
+    createdAt: toIso(row.created_at),
+    ...payload
   };
 }
 
@@ -182,6 +219,77 @@ export class PostgresRepository implements PostRepository {
     return rows.map((row) => rowToStoredPost(row as Record<string, unknown>));
   }
 
+  public async getUnanalyzedPosts(limit: number): Promise<StoredPost[]> {
+    await this.ensureInitialized();
+    const rows = await this.sql`
+      SELECT posts.*
+      FROM posts
+      LEFT JOIN meme_signal_analyses ON meme_signal_analyses.post_id = posts.post_id
+      WHERE meme_signal_analyses.post_id IS NULL
+      ORDER BY COALESCE(posts.created_at, posts.detected_at) DESC, posts.post_id DESC
+      LIMIT ${limit}
+    `;
+    return rows.map((row) => rowToStoredPost(row as Record<string, unknown>));
+  }
+
+  public async saveMemeSignalAnalysis(input: MemeSignalAnalysisInput): Promise<void> {
+    await this.ensureInitialized();
+    await this.sql`
+      INSERT INTO meme_signal_analyses (
+        post_id,
+        status,
+        analysis_json,
+        model,
+        prompt_version,
+        raw_payload_json,
+        error_message,
+        created_at
+      ) VALUES (
+        ${input.postId},
+        ${input.status},
+        ${JSON.stringify(input.analysis ?? emptyMemeSignalPayload)}::jsonb,
+        ${input.model},
+        ${input.promptVersion},
+        ${JSON.stringify(input.rawPayload ?? {})}::jsonb,
+        ${input.errorMessage ?? null},
+        ${input.createdAt}
+      )
+      ON CONFLICT (post_id) DO UPDATE SET
+        status = EXCLUDED.status,
+        analysis_json = EXCLUDED.analysis_json,
+        model = EXCLUDED.model,
+        prompt_version = EXCLUDED.prompt_version,
+        raw_payload_json = EXCLUDED.raw_payload_json,
+        error_message = EXCLUDED.error_message,
+        created_at = EXCLUDED.created_at
+    `;
+  }
+
+  public async getMemeSignals(options: { minScore: number; limit: number }): Promise<MemeSignalAnalysisRecord[]> {
+    await this.ensureInitialized();
+    const rows = await this.sql`
+      SELECT *
+      FROM meme_signal_analyses
+      WHERE status = 'success'
+        AND (analysis_json->>'hasMemecoinSignal')::boolean = TRUE
+        AND (analysis_json->>'signalScore')::integer >= ${options.minScore}
+      ORDER BY (analysis_json->>'signalScore')::integer DESC, created_at DESC
+      LIMIT ${options.limit}
+    `;
+    return rows.map((row) => rowToMemeSignalAnalysis(row as Record<string, unknown>));
+  }
+
+  public async getMemeSignalForPost(postId: string): Promise<MemeSignalAnalysisRecord | null> {
+    await this.ensureInitialized();
+    const rows = await this.sql`
+      SELECT *
+      FROM meme_signal_analyses
+      WHERE post_id = ${postId}
+      LIMIT 1
+    `;
+    return rows[0] ? rowToMemeSignalAnalysis(rows[0] as Record<string, unknown>) : null;
+  }
+
   public async getLatestPoll(): Promise<PollRunRecord | null> {
     await this.ensureInitialized();
     const rows = await this.sql`
@@ -258,6 +366,23 @@ export class PostgresRepository implements PostRepository {
       )
     `;
     await this.sql`CREATE INDEX IF NOT EXISTS idx_poll_runs_finished_at ON poll_runs(finished_at DESC)`;
+    await this.sql`
+      CREATE TABLE IF NOT EXISTS meme_signal_analyses (
+        post_id TEXT PRIMARY KEY REFERENCES posts(post_id) ON DELETE CASCADE,
+        status TEXT NOT NULL,
+        analysis_json JSONB NOT NULL,
+        model TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        raw_payload_json JSONB NOT NULL,
+        error_message TEXT,
+        created_at TIMESTAMPTZ NOT NULL
+      )
+    `;
+    await this.sql`
+      CREATE INDEX IF NOT EXISTS idx_meme_signal_analyses_score
+      ON meme_signal_analyses (((analysis_json->>'signalScore')::integer) DESC)
+      WHERE status = 'success'
+    `;
 
     this.initialized = true;
   }

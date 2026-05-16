@@ -75,6 +75,8 @@ npm run api
 - `GET /posts/latest`
 - `GET /posts?since_detected_at=<ISO timestamp>`
 - `GET /posts?since_created_at=<ISO timestamp>`
+- `GET /meme-signals?min_score=70&limit=50`
+- `GET /posts/<post_id>/meme-analysis`
 
 On Vercel, the same endpoints are under `/api`:
 
@@ -82,7 +84,29 @@ On Vercel, the same endpoints are under `/api`:
 - `GET /api/posts/latest`
 - `GET /api/posts?since_detected_at=<ISO timestamp>`
 - `GET /api/posts?since_created_at=<ISO timestamp>`
+- `GET /api/meme-signals?min_score=70&limit=50`
+- `GET /api/posts/<post_id>/meme-analysis`
 - `GET /api/cron/poll`
+
+## AI memecoin signal analysis
+
+The optional AI layer analyzes saved Polymarket posts and produces search intelligence for possible existing memecoins. It does not launch coins, search token markets, verify contracts, or make trading recommendations.
+
+Enable it with:
+
+```bash
+AI_ENABLED=true
+OPENAI_API_KEY=sk-...
+OPENAI_BASE_URL=https://share-ai.ckbdev.com
+OPENAI_MODEL=gpt-5.4
+OPENAI_REASONING_EFFORT=medium
+OPENAI_DISABLE_RESPONSE_STORAGE=true
+OPENAI_TIMEOUT_MS=30000
+AI_MAX_POSTS_PER_POLL=1
+MEME_SIGNAL_THRESHOLD=70
+```
+
+When enabled, each successful poll analyzes up to `AI_MAX_POSTS_PER_POLL` posts that do not yet have a meme signal analysis. AI failures are stored on the relevant post and do not fail the scraping poll. The recommended cron-safe profile is `gpt-5.4` with `medium` reasoning and one post per poll.
 
 ## Vercel Deployment
 
@@ -97,6 +121,15 @@ X_COOKIE_HEADER=<full Cookie request header from X>
 X_USER_TWEETS_URL=<optional captured /UserTweets? URL>
 CRON_SECRET=<optional random secret>
 LOG_LEVEL=info
+AI_ENABLED=true
+OPENAI_API_KEY=<OpenAI API key>
+OPENAI_BASE_URL=https://share-ai.ckbdev.com
+OPENAI_MODEL=gpt-5.4
+OPENAI_REASONING_EFFORT=medium
+OPENAI_DISABLE_RESPONSE_STORAGE=true
+OPENAI_TIMEOUT_MS=30000
+AI_MAX_POSTS_PER_POLL=1
+MEME_SIGNAL_THRESHOLD=70
 ```
 
 To get `X_COOKIE_HEADER`, log into X in a normal browser with the monitoring account, open DevTools, inspect the network request containing `/UserTweets?`, and copy the full `Cookie` request header. As a fallback, you can set `X_AUTH_TOKEN` and `X_CSRF_TOKEN` from the `auth_token` and `ct0` cookies, but the full cookie header is more reliable. These cookies expire or can be invalidated by X, so monitoring health must be watched.

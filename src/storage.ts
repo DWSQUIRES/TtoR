@@ -6,6 +6,9 @@ import type {
 import { getRepositoryHealthSnapshot, type PostRepository } from "./repository.js";
 import type {
   HealthSnapshot,
+  MemeSignalAnalysisInput,
+  MemeSignalAnalysisRecord,
+  MemeSignalAnalysisPayload,
   NormalizedPost,
   PollRunInput,
   PollRunRecord,
@@ -56,12 +59,47 @@ function rowToPollRun(row: Record<string, unknown>): PollRunRecord {
   };
 }
 
+const emptyMemeSignalPayload: MemeSignalAnalysisPayload = {
+  hasMemecoinSignal: false,
+  signalScore: 0,
+  confidence: "low",
+  narrative: "",
+  whySignal: "",
+  searchTerms: [],
+  possibleNames: [],
+  entities: [],
+  urgency: "low",
+  sensitivityFlags: [],
+  recommendedAction: "ignore"
+};
+
+function rowToMemeSignalAnalysis(row: Record<string, unknown>): MemeSignalAnalysisRecord {
+  const payload = parseJson<MemeSignalAnalysisPayload>(
+    row.analysis_json as string | null
+  ) || emptyMemeSignalPayload;
+
+  return {
+    postId: String(row.post_id),
+    status: String(row.status) as MemeSignalAnalysisRecord["status"],
+    model: String(row.model),
+    promptVersion: String(row.prompt_version),
+    rawPayload: parseJson<Record<string, unknown>>(row.raw_payload_json as string | null),
+    errorMessage: row.error_message ? String(row.error_message) : null,
+    createdAt: String(row.created_at),
+    ...payload
+  };
+}
+
 export class Repository implements PostRepository {
   private readonly insertPostStatement;
   private readonly insertPollRunStatement;
   private readonly latestPostStatement;
   private readonly postsSinceStatement;
   private readonly postsSinceCreatedAtStatement;
+  private readonly unanalyzedPostsStatement;
+  private readonly upsertMemeSignalAnalysisStatement;
+  private readonly memeSignalsStatement;
+  private readonly memeSignalForPostStatement;
   private readonly latestPollStatement;
   private readonly latestSuccessfulPollStatement;
 
@@ -103,6 +141,20 @@ export class Repository implements PostRepository {
       );
 
       CREATE INDEX IF NOT EXISTS idx_poll_runs_finished_at ON poll_runs(finished_at DESC);
+
+      CREATE TABLE IF NOT EXISTS meme_signal_analyses (
+        post_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        analysis_json TEXT NOT NULL,
+        model TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        raw_payload_json TEXT NOT NULL,
+        error_message TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_meme_signal_analyses_score
+        ON meme_signal_analyses(json_extract(analysis_json, '$.signalScore') DESC);
     `);
 
     this.insertPostStatement = this.db.prepare(`
@@ -169,6 +221,53 @@ export class Repository implements PostRepository {
       FROM posts
       WHERE datetime(COALESCE(created_at, detected_at)) >= datetime(?)
       ORDER BY datetime(COALESCE(created_at, detected_at)) ASC, post_id ASC
+    `);
+
+    this.unanalyzedPostsStatement = this.db.prepare(`
+      SELECT posts.*
+      FROM posts
+      LEFT JOIN meme_signal_analyses ON meme_signal_analyses.post_id = posts.post_id
+      WHERE meme_signal_analyses.post_id IS NULL
+      ORDER BY COALESCE(posts.created_at, posts.detected_at) DESC, posts.post_id DESC
+      LIMIT ?
+    `);
+
+    this.upsertMemeSignalAnalysisStatement = this.db.prepare(`
+      INSERT INTO meme_signal_analyses (
+        post_id,
+        status,
+        analysis_json,
+        model,
+        prompt_version,
+        raw_payload_json,
+        error_message,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(post_id) DO UPDATE SET
+        status = excluded.status,
+        analysis_json = excluded.analysis_json,
+        model = excluded.model,
+        prompt_version = excluded.prompt_version,
+        raw_payload_json = excluded.raw_payload_json,
+        error_message = excluded.error_message,
+        created_at = excluded.created_at
+    `);
+
+    this.memeSignalsStatement = this.db.prepare(`
+      SELECT *
+      FROM meme_signal_analyses
+      WHERE status = 'success'
+        AND json_extract(analysis_json, '$.hasMemecoinSignal') = 1
+        AND json_extract(analysis_json, '$.signalScore') >= ?
+      ORDER BY json_extract(analysis_json, '$.signalScore') DESC, created_at DESC
+      LIMIT ?
+    `);
+
+    this.memeSignalForPostStatement = this.db.prepare(`
+      SELECT *
+      FROM meme_signal_analyses
+      WHERE post_id = ?
+      LIMIT 1
     `);
 
     this.latestPollStatement = this.db.prepare(`
@@ -256,6 +355,34 @@ export class Repository implements PostRepository {
   public getPostsSinceCreatedAt(sinceCreatedAt: string): StoredPost[] {
     const rows = this.postsSinceCreatedAtStatement.all(sinceCreatedAt) as Record<string, unknown>[];
     return rows.map(rowToStoredPost);
+  }
+
+  public getUnanalyzedPosts(limit: number): StoredPost[] {
+    const rows = this.unanalyzedPostsStatement.all(limit) as Record<string, unknown>[];
+    return rows.map(rowToStoredPost);
+  }
+
+  public saveMemeSignalAnalysis(input: MemeSignalAnalysisInput): void {
+    this.upsertMemeSignalAnalysisStatement.run(
+      input.postId,
+      input.status,
+      JSON.stringify(input.analysis ?? emptyMemeSignalPayload),
+      input.model,
+      input.promptVersion,
+      JSON.stringify(input.rawPayload ?? {}),
+      input.errorMessage ?? null,
+      input.createdAt
+    );
+  }
+
+  public getMemeSignals(options: { minScore: number; limit: number }): MemeSignalAnalysisRecord[] {
+    const rows = this.memeSignalsStatement.all(options.minScore, options.limit) as Record<string, unknown>[];
+    return rows.map(rowToMemeSignalAnalysis);
+  }
+
+  public getMemeSignalForPost(postId: string): MemeSignalAnalysisRecord | null {
+    const row = this.memeSignalForPostStatement.get(postId) as Record<string, unknown> | undefined;
+    return row ? rowToMemeSignalAnalysis(row) : null;
   }
 
   public getLatestPoll(): PollRunRecord | null {

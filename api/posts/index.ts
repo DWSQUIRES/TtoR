@@ -1,14 +1,5 @@
 import { createVercelRuntime } from "../../src/deployment.js";
-
-function json(body: unknown, init?: ResponseInit): Response {
-  return new Response(JSON.stringify(body, null, 2), {
-    ...init,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      ...(init?.headers ?? {})
-    }
-  });
-}
+import { json } from "../../src/http.js";
 
 export async function GET(request: Request): Promise<Response> {
   const runtime = createVercelRuntime();

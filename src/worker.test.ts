@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { MemeSignalService } from "./ai/memeSignalService.js";
 import type { AppConfig } from "./config.js";
 import type { Logger } from "./logger.js";
 import { Repository } from "./storage.js";
@@ -34,7 +35,16 @@ function buildConfig(): AppConfig {
     xGuestToken: null,
     xBearerToken: null,
     xUserTweetsUrl: null,
-    xCookieHeader: null
+    xCookieHeader: null,
+    aiEnabled: false,
+    openaiApiKey: null,
+    openaiBaseUrl: null,
+    openaiModel: "gpt-5.4",
+    openaiReasoningEffort: "medium",
+    openaiStoreResponses: false,
+    openaiTimeoutMs: 30_000,
+    aiMaxPostsPerPoll: 1,
+    memeSignalThreshold: 70
   };
 }
 
@@ -89,6 +99,7 @@ describe("PollingWorker", () => {
       repository,
       scraper,
       silentLogger,
+      null,
       () => nowValues.shift() ?? new Date("2026-05-15T10:00:05.000Z"),
       () => 0
     );
@@ -126,6 +137,7 @@ describe("PollingWorker", () => {
       repository,
       scraper,
       silentLogger,
+      null,
       () => nowValues.shift() ?? new Date("2026-05-15T10:00:05.000Z"),
       () => 0
     );
@@ -140,6 +152,53 @@ describe("PollingWorker", () => {
     await expect(repository.getHealthSnapshot(config)).resolves.toMatchObject({
       status: "unhealthy"
     });
+
+    repository.close();
+  });
+
+  it("runs optional meme signal analysis after successful polls", async () => {
+    const repository = Repository.open(":memory:");
+    const config = buildConfig();
+    const scraper = createScraper({
+      posts: [
+        {
+          postId: "20",
+          authorHandle: "polymarket",
+          authorDisplayName: "Polymarket",
+          createdAt: "2026-05-15T10:00:00.000Z",
+          detectedAt: "2026-05-15T10:00:05.000Z",
+          text: "Concrete skull recovered",
+          lang: "en",
+          conversationId: "20",
+          replyToPostId: null,
+          quotedPostId: null,
+          isRepost: false,
+          media: [],
+          rawPayload: {}
+        }
+      ],
+      loginExpired: false,
+      extractedAt: "2026-05-15T10:00:05.000Z",
+      sourceUrl: "https://x.com/polymarket",
+      rawHtml: "<html></html>",
+      artifactPaths: []
+    });
+    const memeSignalService = {
+      analyzePendingPosts: vi.fn(async () => ({
+        analyzedCount: 1,
+        signalCount: 1,
+        errorCount: 0
+      }))
+    } as unknown as MemeSignalService;
+    const worker = new PollingWorker(config, repository, scraper, silentLogger, memeSignalService, () => new Date());
+
+    await expect(worker.runCycle()).resolves.toMatchObject({
+      status: "success",
+      aiAnalyzedCount: 1,
+      aiSignalCount: 1,
+      aiErrorCount: 0
+    });
+    expect(memeSignalService.analyzePendingPosts).toHaveBeenCalledOnce();
 
     repository.close();
   });

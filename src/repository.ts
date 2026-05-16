@@ -1,6 +1,13 @@
 import { computeHealthStatus } from "./health.js";
 import type { AppConfig } from "./config.js";
-import type { HealthSnapshot, PollRunInput, PollRunRecord, StoredPost } from "./types.js";
+import type {
+  HealthSnapshot,
+  MemeSignalAnalysisInput,
+  MemeSignalAnalysisRecord,
+  PollRunInput,
+  PollRunRecord,
+  StoredPost
+} from "./types.js";
 
 export type Awaitable<T> = T | Promise<T>;
 
@@ -9,6 +16,10 @@ export interface PostRepository {
   getLatestPost(): Awaitable<StoredPost | null>;
   getPostsSinceDetectedAt(sinceDetectedAt: string): Awaitable<StoredPost[]>;
   getPostsSinceCreatedAt(sinceCreatedAt: string): Awaitable<StoredPost[]>;
+  getUnanalyzedPosts(limit: number): Awaitable<StoredPost[]>;
+  saveMemeSignalAnalysis(input: MemeSignalAnalysisInput): Awaitable<void>;
+  getMemeSignals(options: { minScore: number; limit: number }): Awaitable<MemeSignalAnalysisRecord[]>;
+  getMemeSignalForPost(postId: string): Awaitable<MemeSignalAnalysisRecord | null>;
   getLatestPoll(): Awaitable<PollRunRecord | null>;
   getLatestSuccessfulPoll(): Awaitable<PollRunRecord | null>;
   getHealthSnapshot(config: Pick<AppConfig, "targetHandle">, now?: Date): Awaitable<HealthSnapshot>;

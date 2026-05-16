@@ -1,4 +1,5 @@
 import type { AppConfig } from "./config.js";
+import type { MemeSignalService } from "./ai/memeSignalService.js";
 import { classifyError } from "./errors.js";
 import type { Logger } from "./logger.js";
 import type { PostRepository } from "./repository.js";
@@ -33,6 +34,7 @@ export class PollingWorker {
     private readonly repository: PostRepository,
     private readonly scraper: TimelineScraper,
     private readonly logger: Logger,
+    private readonly memeSignalService: MemeSignalService | null = null,
     private readonly now: () => Date = () => new Date(),
     private readonly random: () => number = () => Math.random(),
     private readonly sleeper: (ms: number) => Promise<void> = sleep
@@ -89,11 +91,15 @@ export class PollingWorker {
           scrapedPostCount: result.posts.length
         }
       });
+      const aiSummary = this.memeSignalService ? await this.memeSignalService.analyzePendingPosts() : null;
 
       this.consecutiveFailures = 0;
       this.logger.info("Polling cycle completed", {
         newPostsCount: saved.newPostsCount,
-        latestPostId: saved.latestPostId
+        latestPostId: saved.latestPostId,
+        aiAnalyzedCount: aiSummary?.analyzedCount,
+        aiSignalCount: aiSummary?.signalCount,
+        aiErrorCount: aiSummary?.errorCount
       });
 
       return {
@@ -102,7 +108,14 @@ export class PollingWorker {
         status: "success",
         newPostsCount: saved.newPostsCount,
         latestPostId: saved.latestPostId,
-        errorCode: null
+        errorCode: null,
+        ...(aiSummary
+          ? {
+              aiAnalyzedCount: aiSummary.analyzedCount,
+              aiSignalCount: aiSummary.signalCount,
+              aiErrorCount: aiSummary.errorCount
+            }
+          : {})
       };
     } catch (error) {
       const finishedAt = this.now().toISOString();

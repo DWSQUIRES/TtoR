@@ -1,6 +1,7 @@
 import { createServer, type Server } from "node:http";
 
 import type { AppConfig } from "./config.js";
+import { parseBoundedInteger } from "./http.js";
 import type { Logger } from "./logger.js";
 import type { PostRepository } from "./repository.js";
 
@@ -108,6 +109,25 @@ async function handleApiRequest(
         : await repository.getPostsSinceDetectedAt(normalizedSince);
 
       send(response, jsonResponse(200, posts));
+      return;
+    }
+
+    if (url.pathname === "/meme-signals") {
+      const minScore = parseBoundedInteger(url.searchParams.get("min_score"), config.memeSignalThreshold, 0, 100);
+      const limit = parseBoundedInteger(url.searchParams.get("limit"), 50, 1, 200);
+      send(response, jsonResponse(200, await repository.getMemeSignals({ minScore, limit })));
+      return;
+    }
+
+    const memeAnalysisMatch = url.pathname.match(/^\/posts\/([^/]+)\/meme-analysis$/);
+    if (memeAnalysisMatch) {
+      const analysis = await repository.getMemeSignalForPost(decodeURIComponent(memeAnalysisMatch[1]));
+      if (!analysis) {
+        send(response, jsonResponse(404, { error: "No meme analysis found for post" }));
+        return;
+      }
+
+      send(response, jsonResponse(200, analysis));
       return;
     }
 

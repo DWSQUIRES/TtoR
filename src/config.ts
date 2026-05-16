@@ -22,6 +22,15 @@ export interface AppConfig {
   xBearerToken: string | null;
   xUserTweetsUrl: string | null;
   xCookieHeader: string | null;
+  aiEnabled: boolean;
+  openaiApiKey: string | null;
+  openaiBaseUrl: string | null;
+  openaiModel: string;
+  openaiReasoningEffort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | null;
+  openaiStoreResponses: boolean;
+  openaiTimeoutMs: number;
+  aiMaxPostsPerPoll: number;
+  memeSignalThreshold: number;
 }
 
 function parsePositiveInteger(value: string | undefined, fallback: number): number {
@@ -50,6 +59,30 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
     return false;
   }
   return fallback;
+}
+
+function clampInteger(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function parseReasoningEffort(value: string | undefined): AppConfig["openaiReasoningEffort"] {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "none" ||
+    normalized === "minimal" ||
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high" ||
+    normalized === "xhigh"
+  ) {
+    return normalized;
+  }
+
+  return null;
 }
 
 function parseDatabasePath(databaseUrl: string): string {
@@ -98,7 +131,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     xGuestToken: env.X_GUEST_TOKEN ?? null,
     xBearerToken: env.X_BEARER_TOKEN ?? null,
     xUserTweetsUrl: env.X_USER_TWEETS_URL ?? null,
-    xCookieHeader: env.X_COOKIE_HEADER ?? null
+    xCookieHeader: env.X_COOKIE_HEADER ?? null,
+    aiEnabled: parseBoolean(env.AI_ENABLED, false),
+    openaiApiKey: env.OPENAI_API_KEY ?? null,
+    openaiBaseUrl: env.OPENAI_BASE_URL ?? null,
+    openaiModel: env.OPENAI_MODEL ?? "gpt-5.4",
+    openaiReasoningEffort: parseReasoningEffort(env.OPENAI_REASONING_EFFORT) ?? "medium",
+    openaiStoreResponses: !parseBoolean(env.OPENAI_DISABLE_RESPONSE_STORAGE, true),
+    openaiTimeoutMs: clampInteger(parsePositiveInteger(env.OPENAI_TIMEOUT_MS, 30_000), 1_000, 55_000),
+    aiMaxPostsPerPoll: clampInteger(parsePositiveInteger(env.AI_MAX_POSTS_PER_POLL, 1), 1, 50),
+    memeSignalThreshold: clampInteger(parsePositiveInteger(env.MEME_SIGNAL_THRESHOLD, 70), 0, 100)
   };
 }
 

@@ -57,6 +57,53 @@ export interface StoredPost extends NormalizedPost {
   insertedAt: string;
 }
 
+export type MemeSignalConfidence = "low" | "medium" | "high";
+export type MemeSignalUrgency = "low" | "medium" | "high";
+export type MemeSignalRecommendedAction = "ignore" | "watch" | "search" | "urgent_search";
+export type MemeSignalStatus = "success" | "error";
+
+export interface MemeSignalName {
+  name: string;
+  ticker: string;
+  priority: number;
+  reason: string;
+}
+
+export interface MemeSignalAnalysisPayload {
+  hasMemecoinSignal: boolean;
+  signalScore: number;
+  confidence: MemeSignalConfidence;
+  narrative: string;
+  whySignal: string;
+  searchTerms: string[];
+  possibleNames: MemeSignalName[];
+  entities: string[];
+  urgency: MemeSignalUrgency;
+  sensitivityFlags: string[];
+  recommendedAction: MemeSignalRecommendedAction;
+}
+
+export interface MemeSignalAnalysisRecord extends MemeSignalAnalysisPayload {
+  postId: string;
+  status: MemeSignalStatus;
+  model: string;
+  promptVersion: string;
+  rawPayload: Record<string, unknown>;
+  errorMessage: string | null;
+  createdAt: string;
+}
+
+export interface MemeSignalAnalysisInput {
+  postId: string;
+  status: MemeSignalStatus;
+  model: string;
+  promptVersion: string;
+  analysis?: MemeSignalAnalysisPayload;
+  rawPayload?: Record<string, unknown>;
+  errorMessage?: string | null;
+  createdAt: string;
+}
+
 export interface HealthSnapshot {
   status: HealthStatus;
   targetHandle: string;
@@ -88,6 +135,9 @@ export interface PollCycleSummary {
   newPostsCount: number;
   latestPostId: string | null;
   errorCode: ErrorCode | null;
+  aiAnalyzedCount?: number;
+  aiSignalCount?: number;
+  aiErrorCount?: number;
 }
 
 export interface BackfillResult {
