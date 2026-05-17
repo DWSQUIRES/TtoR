@@ -345,6 +345,13 @@ select:focus {
   letter-spacing: -0.025em;
 }
 
+.row-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .signal-card p,
 .analysis-row p {
   margin: 8px 0 0;
@@ -428,6 +435,10 @@ select:focus {
 
   .signal-card {
     grid-template-columns: 1fr;
+  }
+
+  .row-heading {
+    display: grid;
   }
 
   .score {

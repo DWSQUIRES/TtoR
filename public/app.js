@@ -176,7 +176,10 @@ function renderSignals(signals) {
       card.innerHTML = `
         <div class="${scoreClass(signal.signalScore)}">${escapeHtml(signal.signalScore)}</div>
         <div>
-          <h3><a class="post-link" href="${xPostUrl(signal.postId)}" target="_blank" rel="noreferrer">${escapeHtml(title)}</a></h3>
+          <div class="row-heading">
+            <h3>${escapeHtml(title)}</h3>
+            <a class="text-link" href="${xPostUrl(signal.postId)}" target="_blank" rel="noreferrer">Open on X</a>
+          </div>
           <p>${escapeHtml(signal.whySignal || signal.narrative || "No rationale returned.")}</p>
           <div class="tag-row">
             <span class="tag action">${escapeHtml(signal.recommendedAction)}</span>
