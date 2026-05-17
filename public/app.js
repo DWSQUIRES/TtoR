@@ -214,7 +214,10 @@ function renderAnalyses(analyses) {
         : analysis.whySignal || analysis.narrative || "No rationale returned.";
       row.innerHTML = `
         <div>
-          <h3><a class="post-link" href="${xPostUrl(analysis.postId)}" target="_blank" rel="noreferrer">${escapeHtml(shortId(analysis.postId))}</a></h3>
+          <div class="row-heading">
+            <h3>${escapeHtml(shortId(analysis.postId))}</h3>
+            <a class="text-link" href="${xPostUrl(analysis.postId)}" target="_blank" rel="noreferrer">Open on X</a>
+          </div>
           <p>${escapeHtml(summary)}</p>
           <div class="tag-row">
             <span class="tag ${isError ? "error" : "action"}">${escapeHtml(analysis.status)}</span>
