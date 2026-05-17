@@ -7,6 +7,7 @@ import type {
   MemeSignalAnalysisInput,
   MemeSignalAnalysisPayload,
   MemeSignalAnalysisRecord,
+  MemeSignalStatus,
   PollRunInput,
   PollRunRecord,
   StoredPost
@@ -18,10 +19,17 @@ function parseJson<T>(value: unknown, fallback: T): T {
   }
 
   if (typeof value === "string") {
-    return JSON.parse(value) as T;
+    return parseJson(JSON.parse(value), fallback);
   }
 
   return value as T;
+}
+
+type JsonValue = Parameters<Sql["json"]>[0];
+type JsonCapableSql = Pick<Sql, "json"> | Pick<TransactionSql, "json">;
+
+function jsonb(sql: JsonCapableSql, value: unknown): ReturnType<Sql["json"]> {
+  return sql.json(value as JsonValue);
 }
 
 function toIso(value: unknown): string {
@@ -152,8 +160,8 @@ export class PostgresRepository implements PostRepository {
             ${post.replyToPostId},
             ${post.quotedPostId},
             ${post.isRepost},
-            ${JSON.stringify(post.media)}::jsonb,
-            ${JSON.stringify(post.rawPayload)}::jsonb
+            ${jsonb(transaction, post.media)},
+            ${jsonb(transaction, post.rawPayload)}
           )
           ON CONFLICT (post_id) DO NOTHING
           RETURNING post_id
@@ -181,7 +189,7 @@ export class PostgresRepository implements PostRepository {
           ${input.errorCode ?? null},
           ${input.errorMessage ?? null},
           ${latestPostId},
-          ${JSON.stringify(input.metadata ?? {})}::jsonb
+          ${jsonb(transaction, input.metadata ?? {})}
         )
       `;
 
@@ -247,10 +255,10 @@ export class PostgresRepository implements PostRepository {
       ) VALUES (
         ${input.postId},
         ${input.status},
-        ${JSON.stringify(input.analysis ?? emptyMemeSignalPayload)}::jsonb,
+        ${jsonb(this.sql, input.analysis ?? emptyMemeSignalPayload)},
         ${input.model},
         ${input.promptVersion},
-        ${JSON.stringify(input.rawPayload ?? {})}::jsonb,
+        ${jsonb(this.sql, input.rawPayload ?? {})},
         ${input.errorMessage ?? null},
         ${input.createdAt}
       )
@@ -276,6 +284,25 @@ export class PostgresRepository implements PostRepository {
       ORDER BY (analysis_json->>'signalScore')::integer DESC, created_at DESC
       LIMIT ${options.limit}
     `;
+    return rows.map((row) => rowToMemeSignalAnalysis(row as Record<string, unknown>));
+  }
+
+  public async getMemeAnalyses(options: { status: MemeSignalStatus | null; limit: number }): Promise<MemeSignalAnalysisRecord[]> {
+    await this.ensureInitialized();
+    const rows = options.status
+      ? await this.sql`
+          SELECT *
+          FROM meme_signal_analyses
+          WHERE status = ${options.status}
+          ORDER BY created_at DESC
+          LIMIT ${options.limit}
+        `
+      : await this.sql`
+          SELECT *
+          FROM meme_signal_analyses
+          ORDER BY created_at DESC
+          LIMIT ${options.limit}
+        `;
     return rows.map((row) => rowToMemeSignalAnalysis(row as Record<string, unknown>));
   }
 
@@ -383,7 +410,36 @@ export class PostgresRepository implements PostRepository {
       ON meme_signal_analyses (((analysis_json->>'signalScore')::integer) DESC)
       WHERE status = 'success'
     `;
+    await this.normalizeLegacyJsonbRows();
 
     this.initialized = true;
+  }
+
+  private async normalizeLegacyJsonbRows(): Promise<void> {
+    await this.sql`
+      UPDATE posts
+      SET media_json = (media_json #>> '{}')::jsonb
+      WHERE jsonb_typeof(media_json) = 'string'
+    `;
+    await this.sql`
+      UPDATE posts
+      SET raw_payload_json = (raw_payload_json #>> '{}')::jsonb
+      WHERE jsonb_typeof(raw_payload_json) = 'string'
+    `;
+    await this.sql`
+      UPDATE poll_runs
+      SET metadata_json = (metadata_json #>> '{}')::jsonb
+      WHERE jsonb_typeof(metadata_json) = 'string'
+    `;
+    await this.sql`
+      UPDATE meme_signal_analyses
+      SET analysis_json = (analysis_json #>> '{}')::jsonb
+      WHERE jsonb_typeof(analysis_json) = 'string'
+    `;
+    await this.sql`
+      UPDATE meme_signal_analyses
+      SET raw_payload_json = (raw_payload_json #>> '{}')::jsonb
+      WHERE jsonb_typeof(raw_payload_json) = 'string'
+    `;
   }
 }

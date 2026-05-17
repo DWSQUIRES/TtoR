@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 
 import type { AppConfig } from "./config.js";
-import { parseBoundedInteger } from "./http.js";
+import { parseAnalysisStatus, parseBoundedInteger } from "./http.js";
 import type { Logger } from "./logger.js";
 import type { PostRepository } from "./repository.js";
 
@@ -116,6 +116,13 @@ async function handleApiRequest(
       const minScore = parseBoundedInteger(url.searchParams.get("min_score"), config.memeSignalThreshold, 0, 100);
       const limit = parseBoundedInteger(url.searchParams.get("limit"), 50, 1, 200);
       send(response, jsonResponse(200, await repository.getMemeSignals({ minScore, limit })));
+      return;
+    }
+
+    if (url.pathname === "/meme-analyses") {
+      const status = parseAnalysisStatus(url.searchParams.get("status"));
+      const limit = parseBoundedInteger(url.searchParams.get("limit"), 50, 1, 200);
+      send(response, jsonResponse(200, await repository.getMemeAnalyses({ status, limit })));
       return;
     }
 

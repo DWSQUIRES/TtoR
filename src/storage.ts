@@ -9,6 +9,7 @@ import type {
   MemeSignalAnalysisInput,
   MemeSignalAnalysisRecord,
   MemeSignalAnalysisPayload,
+  MemeSignalStatus,
   NormalizedPost,
   PollRunInput,
   PollRunRecord,
@@ -98,6 +99,8 @@ export class Repository implements PostRepository {
   private readonly postsSinceCreatedAtStatement;
   private readonly unanalyzedPostsStatement;
   private readonly upsertMemeSignalAnalysisStatement;
+  private readonly memeAnalysesStatement;
+  private readonly memeAnalysesByStatusStatement;
   private readonly memeSignalsStatement;
   private readonly memeSignalForPostStatement;
   private readonly latestPollStatement;
@@ -263,6 +266,21 @@ export class Repository implements PostRepository {
       LIMIT ?
     `);
 
+    this.memeAnalysesStatement = this.db.prepare(`
+      SELECT *
+      FROM meme_signal_analyses
+      ORDER BY created_at DESC
+      LIMIT ?
+    `);
+
+    this.memeAnalysesByStatusStatement = this.db.prepare(`
+      SELECT *
+      FROM meme_signal_analyses
+      WHERE status = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `);
+
     this.memeSignalForPostStatement = this.db.prepare(`
       SELECT *
       FROM meme_signal_analyses
@@ -378,6 +396,13 @@ export class Repository implements PostRepository {
   public getMemeSignals(options: { minScore: number; limit: number }): MemeSignalAnalysisRecord[] {
     const rows = this.memeSignalsStatement.all(options.minScore, options.limit) as Record<string, unknown>[];
     return rows.map(rowToMemeSignalAnalysis);
+  }
+
+  public getMemeAnalyses(options: { status: MemeSignalStatus | null; limit: number }): MemeSignalAnalysisRecord[] {
+    const rows = options.status
+      ? this.memeAnalysesByStatusStatement.all(options.status, options.limit)
+      : this.memeAnalysesStatement.all(options.limit);
+    return (rows as Record<string, unknown>[]).map(rowToMemeSignalAnalysis);
   }
 
   public getMemeSignalForPost(postId: string): MemeSignalAnalysisRecord | null {

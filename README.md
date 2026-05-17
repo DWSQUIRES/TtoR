@@ -75,6 +75,7 @@ npm run api
 - `GET /posts/latest`
 - `GET /posts?since_detected_at=<ISO timestamp>`
 - `GET /posts?since_created_at=<ISO timestamp>`
+- `GET /meme-analyses?status=success&limit=50`
 - `GET /meme-signals?min_score=70&limit=50`
 - `GET /posts/<post_id>/meme-analysis`
 
@@ -84,6 +85,7 @@ On Vercel, the same endpoints are under `/api`:
 - `GET /api/posts/latest`
 - `GET /api/posts?since_detected_at=<ISO timestamp>`
 - `GET /api/posts?since_created_at=<ISO timestamp>`
+- `GET /api/meme-analyses?status=success&limit=50`
 - `GET /api/meme-signals?min_score=70&limit=50`
 - `GET /api/posts/<post_id>/meme-analysis`
 - `GET /api/cron/poll`

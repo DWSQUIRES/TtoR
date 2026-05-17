@@ -123,6 +123,13 @@ describe("Repository", () => {
     });
 
     expect(repository.getUnanalyzedPosts(10)).toHaveLength(0);
+    expect(repository.getMemeAnalyses({ status: null, limit: 10 })).toMatchObject([
+      {
+        postId: "signal-post",
+        status: "success"
+      }
+    ]);
+    expect(repository.getMemeAnalyses({ status: "error", limit: 10 })).toHaveLength(0);
     expect(repository.getMemeSignals({ minScore: 70, limit: 10 })).toMatchObject([
       {
         postId: "signal-post",

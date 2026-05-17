@@ -6,6 +6,7 @@ import type {
   MemeSignalAnalysisRecord,
   PollRunInput,
   PollRunRecord,
+  MemeSignalStatus,
   StoredPost
 } from "./types.js";
 
@@ -18,6 +19,7 @@ export interface PostRepository {
   getPostsSinceCreatedAt(sinceCreatedAt: string): Awaitable<StoredPost[]>;
   getUnanalyzedPosts(limit: number): Awaitable<StoredPost[]>;
   saveMemeSignalAnalysis(input: MemeSignalAnalysisInput): Awaitable<void>;
+  getMemeAnalyses(options: { status: MemeSignalStatus | null; limit: number }): Awaitable<MemeSignalAnalysisRecord[]>;
   getMemeSignals(options: { minScore: number; limit: number }): Awaitable<MemeSignalAnalysisRecord[]>;
   getMemeSignalForPost(postId: string): Awaitable<MemeSignalAnalysisRecord | null>;
   getLatestPoll(): Awaitable<PollRunRecord | null>;

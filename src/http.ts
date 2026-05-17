@@ -21,6 +21,14 @@ export function parseBoundedInteger(value: string | null, fallback: number, min:
   return Math.max(min, Math.min(max, parsed));
 }
 
+export function parseAnalysisStatus(value: string | null): "success" | "error" | null {
+  if (value === "success" || value === "error") {
+    return value;
+  }
+
+  return null;
+}
+
 export function errorJson(error: unknown, status = 500): Response {
   return json(
     {
