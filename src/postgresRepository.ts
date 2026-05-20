@@ -7,6 +7,7 @@ import type {
   DexDiscoveryRunRecord,
   DexDiscoveryStatus,
   DexTokenCandidateInput,
+  DexTokenCandidatePriorityReason,
   DexTokenCandidateRecord,
   DexTokenCandidateRiskFlag,
   HealthSnapshot,
@@ -145,6 +146,15 @@ function rowToDexTokenCandidate(row: Record<string, unknown>): DexTokenCandidate
     matchedTerms: parseJson<string[]>(row.matched_terms_json, []),
     rawPayload: parseJson<Record<string, unknown>>(row.raw_payload_json, {}),
     discoveredAt: toIso(row.discovered_at),
+    lastCheckedAt: row.last_checked_at ? toIso(row.last_checked_at) : toIso(row.updated_at ?? row.discovered_at),
+    priorityScore: Number(row.priority_score ?? 0),
+    priorityReasons: parseJson<DexTokenCandidatePriorityReason[]>(row.priority_reasons_json, []),
+    firstPriceUsd: row.first_price_usd === null || row.first_price_usd === undefined ? null : Number(row.first_price_usd),
+    firstLiquidityUsd: row.first_liquidity_usd === null || row.first_liquidity_usd === undefined ? null : Number(row.first_liquidity_usd),
+    firstVolume24hUsd: row.first_volume_24h_usd === null || row.first_volume_24h_usd === undefined ? null : Number(row.first_volume_24h_usd),
+    previousPriceUsd: row.previous_price_usd === null || row.previous_price_usd === undefined ? null : Number(row.previous_price_usd),
+    previousLiquidityUsd: row.previous_liquidity_usd === null || row.previous_liquidity_usd === undefined ? null : Number(row.previous_liquidity_usd),
+    previousVolume24hUsd: row.previous_volume_24h_usd === null || row.previous_volume_24h_usd === undefined ? null : Number(row.previous_volume_24h_usd),
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
     signalScore: row.signal_score === null || row.signal_score === undefined ? null : Number(row.signal_score),
@@ -427,11 +437,6 @@ export class PostgresRepository implements PostRepository {
   public async upsertDexTokenCandidates(postId: string, candidates: DexTokenCandidateInput[]): Promise<void> {
     await this.ensureInitialized();
     await this.sql.begin(async (transaction) => {
-      await transaction`
-        DELETE FROM dex_token_candidates
-        WHERE post_id = ${postId}
-      `;
-
       for (const candidate of candidates) {
         await transaction`
           INSERT INTO dex_token_candidates (
@@ -455,6 +460,15 @@ export class PostgresRepository implements PostRepository {
             matched_terms_json,
             raw_payload_json,
             discovered_at,
+            first_price_usd,
+            first_liquidity_usd,
+            first_volume_24h_usd,
+            previous_price_usd,
+            previous_liquidity_usd,
+            previous_volume_24h_usd,
+            last_checked_at,
+            priority_score,
+            priority_reasons_json,
             updated_at
           ) VALUES (
             ${postId},
@@ -477,6 +491,15 @@ export class PostgresRepository implements PostRepository {
             ${jsonb(transaction, candidate.matchedTerms)},
             ${jsonb(transaction, candidate.rawPayload)},
             ${candidate.discoveredAt},
+            ${candidate.priceUsd},
+            ${candidate.liquidityUsd},
+            ${candidate.volume24hUsd},
+            ${null},
+            ${null},
+            ${null},
+            ${candidate.lastCheckedAt},
+            ${candidate.priorityScore},
+            ${jsonb(transaction, candidate.priorityReasons)},
             ${candidate.discoveredAt}
           )
           ON CONFLICT (post_id, chain_id, pair_address) DO UPDATE SET
@@ -496,11 +519,36 @@ export class PostgresRepository implements PostRepository {
             risk_flags_json = EXCLUDED.risk_flags_json,
             matched_terms_json = EXCLUDED.matched_terms_json,
             raw_payload_json = EXCLUDED.raw_payload_json,
-            discovered_at = EXCLUDED.discovered_at,
+            previous_price_usd = dex_token_candidates.price_usd,
+            previous_liquidity_usd = dex_token_candidates.liquidity_usd,
+            previous_volume_24h_usd = dex_token_candidates.volume_24h_usd,
+            last_checked_at = EXCLUDED.last_checked_at,
+            priority_score = EXCLUDED.priority_score,
+            priority_reasons_json = EXCLUDED.priority_reasons_json,
             updated_at = EXCLUDED.updated_at
         `;
       }
     });
+  }
+
+  public async getDexCandidatesPendingRefresh(options: {
+    limit: number;
+    ttlMinutes: number;
+  }): Promise<DexTokenCandidateRecord[]> {
+    await this.ensureInitialized();
+    const rows = await this.sql`
+      SELECT
+        dex_token_candidates.*,
+        (meme_signal_analyses.analysis_json->>'signalScore')::integer AS signal_score,
+        meme_signal_analyses.analysis_json->>'narrative' AS narrative,
+        meme_signal_analyses.analysis_json->>'whySignal' AS why_signal
+      FROM dex_token_candidates
+      LEFT JOIN meme_signal_analyses ON meme_signal_analyses.post_id = dex_token_candidates.post_id
+      WHERE last_checked_at <= NOW() - (${options.ttlMinutes}::text || ' minutes')::interval
+      ORDER BY priority_score DESC, last_checked_at ASC
+      LIMIT ${options.limit}
+    `;
+    return rows.map((row) => rowToDexTokenCandidate(row as Record<string, unknown>));
   }
 
   public async getDexDiscoveries(options: { minScore: number; limit: number }): Promise<DexTokenCandidateRecord[]> {
@@ -514,7 +562,7 @@ export class PostgresRepository implements PostRepository {
       FROM dex_token_candidates
       JOIN meme_signal_analyses ON meme_signal_analyses.post_id = dex_token_candidates.post_id
       WHERE match_score >= ${options.minScore}
-      ORDER BY match_score DESC, COALESCE(liquidity_usd, 0) DESC, discovered_at DESC
+      ORDER BY priority_score DESC, match_score DESC, COALESCE(liquidity_usd, 0) DESC, discovered_at DESC
       LIMIT ${options.limit}
     `;
     return rows.map((row) => rowToDexTokenCandidate(row as Record<string, unknown>));
@@ -531,7 +579,7 @@ export class PostgresRepository implements PostRepository {
       FROM dex_token_candidates
       LEFT JOIN meme_signal_analyses ON meme_signal_analyses.post_id = dex_token_candidates.post_id
       WHERE dex_token_candidates.post_id = ${postId}
-      ORDER BY match_score DESC, COALESCE(liquidity_usd, 0) DESC, discovered_at DESC
+      ORDER BY priority_score DESC, match_score DESC, COALESCE(liquidity_usd, 0) DESC, discovered_at DESC
     `;
     return rows.map((row) => rowToDexTokenCandidate(row as Record<string, unknown>));
   }
@@ -669,18 +717,58 @@ export class PostgresRepository implements PostRepository {
         matched_terms_json JSONB NOT NULL,
         raw_payload_json JSONB NOT NULL,
         discovered_at TIMESTAMPTZ NOT NULL,
+        first_price_usd DOUBLE PRECISION,
+        first_liquidity_usd DOUBLE PRECISION,
+        first_volume_24h_usd DOUBLE PRECISION,
+        previous_price_usd DOUBLE PRECISION,
+        previous_liquidity_usd DOUBLE PRECISION,
+        previous_volume_24h_usd DOUBLE PRECISION,
+        last_checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        priority_score INTEGER NOT NULL DEFAULT 0,
+        priority_reasons_json JSONB NOT NULL DEFAULT '[]'::jsonb,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         PRIMARY KEY (post_id, chain_id, pair_address)
       )
     `;
+    await this.ensureDexTokenCandidateColumns();
     await this.sql`
       CREATE INDEX IF NOT EXISTS idx_dex_token_candidates_score
       ON dex_token_candidates(match_score DESC, discovered_at DESC)
     `;
+    await this.sql`
+      CREATE INDEX IF NOT EXISTS idx_dex_token_candidates_refresh
+      ON dex_token_candidates(last_checked_at ASC, priority_score DESC)
+    `;
     await this.normalizeLegacyJsonbRows();
 
     this.initialized = true;
+  }
+
+  private async ensureDexTokenCandidateColumns(): Promise<void> {
+    await this.sql`ALTER TABLE dex_token_candidates ADD COLUMN IF NOT EXISTS first_price_usd DOUBLE PRECISION`;
+    await this.sql`ALTER TABLE dex_token_candidates ADD COLUMN IF NOT EXISTS first_liquidity_usd DOUBLE PRECISION`;
+    await this.sql`ALTER TABLE dex_token_candidates ADD COLUMN IF NOT EXISTS first_volume_24h_usd DOUBLE PRECISION`;
+    await this.sql`ALTER TABLE dex_token_candidates ADD COLUMN IF NOT EXISTS previous_price_usd DOUBLE PRECISION`;
+    await this.sql`ALTER TABLE dex_token_candidates ADD COLUMN IF NOT EXISTS previous_liquidity_usd DOUBLE PRECISION`;
+    await this.sql`ALTER TABLE dex_token_candidates ADD COLUMN IF NOT EXISTS previous_volume_24h_usd DOUBLE PRECISION`;
+    await this.sql`ALTER TABLE dex_token_candidates ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ`;
+    await this.sql`ALTER TABLE dex_token_candidates ADD COLUMN IF NOT EXISTS priority_score INTEGER NOT NULL DEFAULT 0`;
+    await this.sql`ALTER TABLE dex_token_candidates ADD COLUMN IF NOT EXISTS priority_reasons_json JSONB NOT NULL DEFAULT '[]'::jsonb`;
+    await this.sql`
+      UPDATE dex_token_candidates
+      SET
+        first_price_usd = COALESCE(first_price_usd, price_usd),
+        first_liquidity_usd = COALESCE(first_liquidity_usd, liquidity_usd),
+        first_volume_24h_usd = COALESCE(first_volume_24h_usd, volume_24h_usd),
+        last_checked_at = COALESCE(last_checked_at, updated_at, discovered_at)
+      WHERE first_price_usd IS NULL
+        OR first_liquidity_usd IS NULL
+        OR first_volume_24h_usd IS NULL
+        OR last_checked_at IS NULL
+    `;
+    await this.sql`ALTER TABLE dex_token_candidates ALTER COLUMN last_checked_at SET NOT NULL`;
+    await this.sql`ALTER TABLE dex_token_candidates ALTER COLUMN last_checked_at SET DEFAULT NOW()`;
   }
 
   private async normalizeLegacyJsonbRows(): Promise<void> {

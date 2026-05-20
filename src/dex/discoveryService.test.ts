@@ -20,6 +20,8 @@ const config: Pick<
   | "dexDiscoveryMaxSignalsPerRun"
   | "dexDiscoveryMaxQueriesPerSignal"
   | "dexDiscoveryCacheTtlMinutes"
+  | "dexCandidateRefreshTtlMinutes"
+  | "dexCandidateRefreshLimit"
   | "dexDiscoveryMinLiquidityUsd"
   | "dexDiscoveryMinVolume24hUsd"
 > = {
@@ -27,6 +29,8 @@ const config: Pick<
   dexDiscoveryMaxSignalsPerRun: 5,
   dexDiscoveryMaxQueriesPerSignal: 8,
   dexDiscoveryCacheTtlMinutes: 30,
+  dexCandidateRefreshTtlMinutes: 10,
+  dexCandidateRefreshLimit: 100,
   dexDiscoveryMinLiquidityUsd: 5000,
   dexDiscoveryMinVolume24hUsd: 1000
 };
@@ -108,7 +112,8 @@ describe("DexDiscoveryService", () => {
           },
           pairCreatedAt: Date.parse("2026-05-15T09:00:00.000Z")
         }
-      ])
+      ]),
+      getPairsByChainAndAddresses: vi.fn(async () => [])
     };
     const service = new DexDiscoveryService(
       config,
@@ -121,12 +126,125 @@ describe("DexDiscoveryService", () => {
     await expect(service.discoverPendingSignals()).resolves.toMatchObject({
       analyzedSignalCount: 1,
       candidateCount: 1,
+      refreshedCandidateCount: 0,
       errorCount: 0
     });
     expect(repository.getDexDiscoveryForPost("post-1")).toMatchObject([
       {
         postId: "post-1",
-        baseTokenSymbol: "SKULL"
+        baseTokenSymbol: "SKULL",
+        priorityScore: 15
+      }
+    ]);
+
+    repository.close();
+  });
+
+  it("refreshes stale tracked candidates and marks performing tokens as priority", async () => {
+    const repository = Repository.open(":memory:");
+    repository.recordPollRun({
+      startedAt: "2026-05-15T10:00:00.000Z",
+      finishedAt: "2026-05-15T10:00:05.000Z",
+      status: "success",
+      posts: [createPost("post-1")]
+    });
+    repository.saveMemeSignalAnalysis({
+      postId: "post-1",
+      status: "success",
+      model: "test",
+      promptVersion: "test",
+      analysis,
+      createdAt: "2026-05-15T10:00:06.000Z"
+    });
+    repository.upsertDexTokenCandidates("post-1", [
+      {
+        postId: "post-1",
+        chainId: "solana",
+        dexId: "raydium",
+        pairAddress: "pair-1",
+        baseTokenAddress: "token-1",
+        baseTokenName: "Concrete Skull",
+        baseTokenSymbol: "SKULL",
+        quoteTokenSymbol: "SOL",
+        url: "https://dexscreener.com/solana/pair-1",
+        priceUsd: 0.001,
+        liquidityUsd: 20_000,
+        volume24hUsd: 20_000,
+        marketCap: 500_000,
+        fdv: 500_000,
+        pairCreatedAt: "2026-05-15T09:00:00.000Z",
+        matchScore: 91,
+        riskFlags: ["new_pair"],
+        matchedTerms: ["concrete skull"],
+        rawPayload: {},
+        discoveredAt: "2026-05-15T10:00:10.000Z",
+        lastCheckedAt: "2026-05-15T10:00:10.000Z",
+        priorityScore: 15,
+        priorityReasons: ["fresh_launch"]
+      }
+    ]);
+    repository.saveDexDiscoveryRun({
+      postId: "post-1",
+      status: "success",
+      startedAt: "2026-05-15T10:00:10.000Z",
+      finishedAt: "2026-05-15T10:00:11.000Z",
+      signalCount: 1,
+      candidateCount: 1,
+      errorCount: 0
+    });
+
+    const client: DexScreenerClient = {
+      searchPairs: vi.fn(async () => []),
+      getPairsByChainAndAddresses: vi.fn(async () => [
+        {
+          chainId: "solana",
+          dexId: "raydium",
+          pairAddress: "pair-1",
+          url: "https://dexscreener.com/solana/pair-1",
+          baseToken: {
+            address: "token-1",
+            name: "Concrete Skull",
+            symbol: "SKULL"
+          },
+          quoteToken: {
+            symbol: "SOL"
+          },
+          priceUsd: "0.003",
+          liquidity: {
+            usd: 70_000
+          },
+          volume: {
+            h24: 150_000
+          },
+          pairCreatedAt: Date.parse("2026-05-15T09:00:00.000Z")
+        }
+      ])
+    };
+    const service = new DexDiscoveryService(
+      {
+        ...config,
+        dexDiscoveryCacheTtlMinutes: 1_000_000,
+        dexCandidateRefreshTtlMinutes: 10
+      },
+      repository,
+      client,
+      silentLogger,
+      () => new Date("2026-05-15T10:20:10.000Z")
+    );
+
+    await expect(service.discoverPendingSignals()).resolves.toMatchObject({
+      analyzedSignalCount: 0,
+      refreshedCandidateCount: 1,
+      highPriorityCount: 1,
+      errorCount: 0
+    });
+    expect(client.getPairsByChainAndAddresses).toHaveBeenCalledWith("solana", ["pair-1"]);
+    expect(repository.getDexDiscoveryForPost("post-1")).toMatchObject([
+      {
+        priceUsd: 0.003,
+        previousPriceUsd: 0.001,
+        firstPriceUsd: 0.001,
+        priorityReasons: expect.arrayContaining(["price_up_since_last_check", "price_up_since_discovery"])
       }
     ]);
 

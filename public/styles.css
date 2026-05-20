@@ -415,6 +415,11 @@ select:focus {
   background: rgba(255, 255, 255, 0.36);
 }
 
+.coin-card.high-priority {
+  border-color: rgba(20, 105, 74, 0.42);
+  background: rgba(232, 246, 239, 0.76);
+}
+
 .coin-card-top {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -458,6 +463,11 @@ select:focus {
 .tag.action {
   color: var(--accent-strong);
   background: var(--accent-soft);
+}
+
+.tag.priority {
+  color: #0c5a40;
+  background: #d9f1e6;
 }
 
 .tag.error {

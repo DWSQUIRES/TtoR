@@ -191,7 +191,32 @@ describe("Repository", () => {
       rawPayload: {
         pairAddress: "pair-1"
       },
-      discoveredAt: "2026-05-15T10:00:10.000Z"
+      discoveredAt: "2026-05-15T10:00:10.000Z",
+      lastCheckedAt: "2026-05-15T10:00:10.000Z",
+      priorityScore: 35,
+      priorityReasons: ["strong_volume", "strong_liquidity"]
+    };
+    const laterCandidate: DexTokenCandidateInput = {
+      ...candidate,
+      priceUsd: 0.003,
+      liquidityUsd: 75_000,
+      volume24hUsd: 180_000,
+      discoveredAt: "2026-05-15T10:45:10.000Z",
+      lastCheckedAt: "2026-05-15T10:45:10.000Z",
+      priorityScore: 85,
+      priorityReasons: ["price_up_since_last_check", "strong_volume"]
+    };
+    const secondCandidate: DexTokenCandidateInput = {
+      ...candidate,
+      pairAddress: "pair-2",
+      baseTokenAddress: "token-2",
+      baseTokenName: "Other Skull",
+      baseTokenSymbol: "OSKULL",
+      priceUsd: 0.002,
+      discoveredAt: "2026-05-15T10:01:10.000Z",
+      lastCheckedAt: "2026-05-15T10:01:10.000Z",
+      priorityScore: 10,
+      priorityReasons: []
     };
 
     repository.recordPollRun({
@@ -215,6 +240,8 @@ describe("Repository", () => {
       }
     ]);
     repository.upsertDexTokenCandidates(post.postId, [candidate]);
+    repository.upsertDexTokenCandidates(post.postId, [secondCandidate]);
+    repository.upsertDexTokenCandidates(post.postId, [laterCandidate]);
     repository.saveDexDiscoveryRun({
       postId: post.postId,
       status: "success",
@@ -228,16 +255,20 @@ describe("Repository", () => {
       }
     });
 
-    expect(repository.getDexDiscoveries({ minScore: 70, limit: 10 })).toMatchObject([
-      {
-        postId: "signal-post",
-        baseTokenSymbol: "SKULL",
-        matchScore: 91,
-        signalScore: 88,
-        narrative: "Concrete skull recovered"
-      }
-    ]);
-    expect(repository.getDexDiscoveryForPost("signal-post")).toHaveLength(1);
+    expect(repository.getDexDiscoveries({ minScore: 70, limit: 10 })[0]).toMatchObject({
+      postId: "signal-post",
+      baseTokenSymbol: "SKULL",
+      matchScore: 91,
+      priceUsd: 0.003,
+      firstPriceUsd: 0.001,
+      previousPriceUsd: 0.001,
+      priorityScore: 85,
+      priorityReasons: ["price_up_since_last_check", "strong_volume"],
+      signalScore: 88,
+      narrative: "Concrete skull recovered"
+    });
+    expect(repository.getDexDiscoveryForPost("signal-post")).toHaveLength(2);
+    expect(repository.getDexCandidatesPendingRefresh({ limit: 10, ttlMinutes: 1 })).toHaveLength(2);
     expect(repository.getSignalsPendingDexDiscovery({ minScore: 70, limit: 10, ttlMinutes: 1_000_000 })).toHaveLength(0);
 
     repository.close();

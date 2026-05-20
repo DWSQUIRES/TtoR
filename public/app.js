@@ -153,6 +153,66 @@ function renderRiskFlags(flags) {
     .join("");
 }
 
+function renderPriorityReasons(candidate) {
+  const reasons = Array.isArray(candidate.priorityReasons) ? candidate.priorityReasons : [];
+  if (reasons.length === 0) {
+    return "";
+  }
+
+  return reasons
+    .slice(0, 4)
+    .map((reason) => `<span class="tag priority">${escapeHtml(String(reason).replaceAll("_", " "))}</span>`)
+    .join("");
+}
+
+function metricGain(current, previous) {
+  const currentNumber = Number(current);
+  const previousNumber = Number(previous);
+  if (!Number.isFinite(currentNumber) || !Number.isFinite(previousNumber) || previousNumber <= 0) {
+    return null;
+  }
+
+  return (currentNumber - previousNumber) / previousNumber;
+}
+
+function formatGain(value) {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  const formatted = new Intl.NumberFormat(undefined, {
+    style: "percent",
+    maximumFractionDigits: Math.abs(value) >= 1 ? 0 : 1
+  }).format(value);
+  return value > 0 ? `+${formatted}` : formatted;
+}
+
+function scoreFallbackPriority(candidate) {
+  const reasons = [];
+  let score = 0;
+
+  if ((candidate.volume24hUsd ?? 0) >= 100_000) {
+    reasons.push("strong_volume");
+    score += 20;
+  }
+  if ((candidate.liquidityUsd ?? 0) >= 50_000) {
+    reasons.push("strong_liquidity");
+    score += 15;
+  }
+  if (candidate.pairCreatedAt) {
+    const ageHours = (Date.now() - new Date(candidate.pairCreatedAt).getTime()) / 3_600_000;
+    if (Number.isFinite(ageHours) && ageHours <= 24) {
+      reasons.push("fresh_launch");
+      score += 15;
+    }
+  }
+
+  return {
+    priorityScore: Math.min(100, score),
+    priorityReasons: reasons
+  };
+}
+
 function normalizeTerm(value) {
   return String(value ?? "")
     .replaceAll("$", "")
@@ -243,11 +303,18 @@ function pairToDexCandidate(pair, source, query) {
     volume24hUsd,
     marketCap: Number(pair.marketCap ?? 0),
     fdv: Number(pair.fdv ?? 0),
+    pairCreatedAt: pair.pairCreatedAt ? new Date(Number(pair.pairCreatedAt)).toISOString() : null,
     matchScore,
     riskFlags,
     matchedTerms: [query],
     narrative: source.narrative,
-    whySignal: source.whySignal
+    whySignal: source.whySignal,
+    lastCheckedAt: new Date().toISOString(),
+    ...scoreFallbackPriority({
+      liquidityUsd,
+      volume24hUsd,
+      pairCreatedAt: pair.pairCreatedAt ? new Date(Number(pair.pairCreatedAt)).toISOString() : null
+    })
   };
 }
 
@@ -303,10 +370,17 @@ function groupDexDiscoveriesByNews(candidates, signals) {
     .map((group) => ({
       ...group,
       candidates: group.candidates.sort(
-        (left, right) => right.matchScore - left.matchScore || (right.liquidityUsd ?? 0) - (left.liquidityUsd ?? 0)
+        (left, right) =>
+          (right.priorityScore ?? 0) - (left.priorityScore ?? 0) ||
+          right.matchScore - left.matchScore ||
+          (right.liquidityUsd ?? 0) - (left.liquidityUsd ?? 0)
       )
     }))
-    .sort((left, right) => (right.signalScore ?? 0) - (left.signalScore ?? 0) || right.candidates.length - left.candidates.length);
+    .sort((left, right) => {
+      const leftPriority = Math.max(...left.candidates.map((candidate) => candidate.priorityScore ?? 0));
+      const rightPriority = Math.max(...right.candidates.map((candidate) => candidate.priorityScore ?? 0));
+      return rightPriority - leftPriority || (right.signalScore ?? 0) - (left.signalScore ?? 0) || right.candidates.length - left.candidates.length;
+    });
 }
 
 function escapeHtml(value) {
@@ -385,12 +459,15 @@ function renderSignals(signals) {
 
 function renderDexCoinCard(candidate) {
   const card = document.createElement("article");
-  card.className = "coin-card";
+  const highPriority = (candidate.priorityScore ?? 0) >= 50;
+  card.className = highPriority ? "coin-card high-priority" : "coin-card";
   const symbol = candidate.baseTokenSymbol ? `$${candidate.baseTokenSymbol}` : "";
   const title = `${candidate.baseTokenName ?? "Unknown token"} ${symbol}`.trim();
   const matched = Array.isArray(candidate.matchedTerms) && candidate.matchedTerms[0]
     ? `<span class="tag">matched ${escapeHtml(candidate.matchedTerms[0])}</span>`
     : "";
+  const priceGain = formatGain(metricGain(candidate.priceUsd, candidate.previousPriceUsd));
+  const discoveryGain = formatGain(metricGain(candidate.priceUsd, candidate.firstPriceUsd));
 
   card.innerHTML = `
     <div class="coin-card-top">
@@ -401,10 +478,15 @@ function renderDexCoinCard(candidate) {
       <div class="${scoreClass(candidate.matchScore)}">${escapeHtml(candidate.matchScore)}</div>
     </div>
     <div class="tag-row compact">
+      ${highPriority ? `<span class="tag priority">high priority ${escapeHtml(candidate.priorityScore ?? 0)}</span>` : ""}
       <span class="tag">liq ${escapeHtml(formatUsd(candidate.liquidityUsd))}</span>
       <span class="tag">24h ${escapeHtml(formatUsd(candidate.volume24hUsd))}</span>
       <span class="tag">fdv ${escapeHtml(formatUsd(candidate.fdv))}</span>
+      ${priceGain ? `<span class="tag action">price ${escapeHtml(priceGain)} check</span>` : ""}
+      ${discoveryGain ? `<span class="tag action">price ${escapeHtml(discoveryGain)} discovery</span>` : ""}
+      ${candidate.lastCheckedAt ? `<span class="tag">checked ${escapeHtml(formatRelative(candidate.lastCheckedAt))}</span>` : ""}
       ${matched}
+      ${renderPriorityReasons(candidate)}
       ${renderRiskFlags(candidate.riskFlags)}
     </div>
     <a class="text-link" href="${escapeHtml(candidate.url)}" target="_blank" rel="noreferrer">Open DexScreener</a>
@@ -415,7 +497,10 @@ function renderDexCoinCard(candidate) {
 function renderDexDiscoveries(candidates, signals) {
   elements.dexCount.textContent = String(candidates.length);
   const groups = groupDexDiscoveriesByNews(candidates, signals);
-  elements.dexStateLabel.textContent = groups.length ? `${groups.length} news groups` : "No token matches";
+  const highPriorityCount = candidates.filter((candidate) => (candidate.priorityScore ?? 0) >= 50).length;
+  elements.dexStateLabel.textContent = groups.length
+    ? `${groups.length} news groups${highPriorityCount ? `, ${highPriorityCount} priority` : ""}`
+    : "No token matches";
 
   if (candidates.length === 0) {
     setState(elements.dexState, "Empty");
@@ -423,16 +508,18 @@ function renderDexDiscoveries(candidates, signals) {
     return;
   }
 
-  setState(elements.dexState, `${groups.length} news`, "good");
+  setState(elements.dexState, highPriorityCount ? `${highPriorityCount} priority` : `${groups.length} news`, "good");
   elements.dexList.replaceChildren(
     ...groups.map((group) => {
       const section = document.createElement("article");
       section.className = "dex-news-group";
+      const groupPriorityCount = group.candidates.filter((candidate) => (candidate.priorityScore ?? 0) >= 50).length;
       section.innerHTML = `
         <div class="dex-news-heading">
           <div>
             <div class="tag-row compact">
               <span class="tag action">${escapeHtml(group.candidates.length)} possible coins</span>
+              ${groupPriorityCount ? `<span class="tag priority">${escapeHtml(groupPriorityCount)} high priority</span>` : ""}
               ${group.signalScore === null ? "" : `<span class="tag">signal ${escapeHtml(group.signalScore)}</span>`}
             </div>
             <h3>${escapeHtml(group.title)}</h3>
@@ -447,6 +534,15 @@ function renderDexDiscoveries(candidates, signals) {
       return section;
     })
   );
+}
+
+async function loadDexDiscoveries(signals, minScore) {
+  const stored = await api(`/api/dex-discoveries?min_score=${minScore}&limit=100`).catch(() => []);
+  if (Array.isArray(stored) && stored.length > 0) {
+    return stored;
+  }
+
+  return discoverDexFromSignals(signals);
 }
 
 function renderAnalyses(analyses) {
@@ -511,7 +607,7 @@ async function refresh() {
       api(`/api/meme-signals?min_score=${minScore}&limit=20`),
       api(`/api/meme-analyses?limit=25${status}`)
     ]);
-    const dexDiscoveries = await discoverDexFromSignals(signals);
+    const dexDiscoveries = await loadDexDiscoveries(signals, minScore);
 
     let latestAnalysis = null;
     if (latestPost?.postId) {

@@ -117,7 +117,7 @@ When enabled, each successful poll analyzes up to `AI_MAX_POSTS_PER_POLL` posts 
 
 ## DEX discovery layer
 
-The optional DEX discovery layer runs independently from X polling and Telegram trading. It consumes stored high-score meme signals, searches DexScreener for existing token pairs, stores ranked matches, and exposes them through the API/dashboard. It does not quote or execute trades.
+The optional DEX discovery layer runs independently from X polling and Telegram trading. It consumes stored high-score meme signals, searches DexScreener for existing token pairs, refreshes already identified pairs on an interval, stores ranked matches, and exposes them through the API/dashboard. It does not quote or execute trades.
 
 Enable it with:
 
@@ -127,6 +127,8 @@ DEX_DISCOVERY_MIN_SIGNAL_SCORE=70
 DEX_DISCOVERY_MAX_SIGNALS_PER_RUN=5
 DEX_DISCOVERY_MAX_QUERIES_PER_SIGNAL=8
 DEX_DISCOVERY_CACHE_TTL_MINUTES=30
+DEX_CANDIDATE_REFRESH_TTL_MINUTES=10
+DEX_CANDIDATE_REFRESH_LIMIT=100
 DEX_DISCOVERY_MIN_LIQUIDITY_USD=5000
 DEX_DISCOVERY_MIN_VOLUME_24H_USD=1000
 DEXSCREENER_BASE_URL=https://api.dexscreener.com
@@ -138,7 +140,9 @@ Run locally:
 npm run dex-discovery
 ```
 
-On Vercel, call `/api/cron/dex-discovery` with the same `Authorization: Bearer <CRON_SECRET>` header used by the poll cron.
+Each run refreshes stale known pairs by exact DexScreener pair address and re-searches stale narrative signals after `DEX_DISCOVERY_CACHE_TTL_MINUTES`, so later launches can be picked up. Tokens with growing price, volume, liquidity, or already strong market activity receive priority reasons shown in the dashboard.
+
+On Vercel, `/api/cron/dex-discovery` is scheduled in `vercel.json` every 10 minutes. External schedulers can call the same path with the `Authorization: Bearer <CRON_SECRET>` header.
 
 ## Vercel Deployment
 

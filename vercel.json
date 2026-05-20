@@ -5,6 +5,10 @@
     {
       "path": "/api/cron/poll",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/dex-discovery",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

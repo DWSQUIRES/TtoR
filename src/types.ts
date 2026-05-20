@@ -114,6 +114,17 @@ export type DexTokenCandidateRiskFlag =
   | "duplicate_symbol"
   | "high_fdv_low_liquidity";
 
+export type DexTokenCandidatePriorityReason =
+  | "strong_volume"
+  | "strong_liquidity"
+  | "fresh_launch"
+  | "price_up_since_last_check"
+  | "volume_up_since_last_check"
+  | "liquidity_up_since_last_check"
+  | "price_up_since_discovery"
+  | "volume_up_since_discovery"
+  | "liquidity_up_since_discovery";
+
 export interface DexDiscoveryRunInput {
   postId: string;
   status: DexDiscoveryStatus;
@@ -151,9 +162,18 @@ export interface DexTokenCandidateInput {
   matchedTerms: string[];
   rawPayload: Record<string, unknown>;
   discoveredAt: string;
+  lastCheckedAt: string;
+  priorityScore: number;
+  priorityReasons: DexTokenCandidatePriorityReason[];
 }
 
 export interface DexTokenCandidateRecord extends DexTokenCandidateInput {
+  firstPriceUsd: number | null;
+  firstLiquidityUsd: number | null;
+  firstVolume24hUsd: number | null;
+  previousPriceUsd: number | null;
+  previousLiquidityUsd: number | null;
+  previousVolume24hUsd: number | null;
   createdAt: string;
   updatedAt: string;
   signalScore: number | null;

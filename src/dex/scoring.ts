@@ -1,4 +1,10 @@
-import type { DexTokenCandidateInput, DexTokenCandidateRiskFlag, MemeSignalAnalysisRecord } from "../types.js";
+import type {
+  DexTokenCandidateInput,
+  DexTokenCandidatePriorityReason,
+  DexTokenCandidateRecord,
+  DexTokenCandidateRiskFlag,
+  MemeSignalAnalysisRecord
+} from "../types.js";
 import type { DexScreenerPair } from "./dexScreenerClient.js";
 
 function normalize(value: string | null | undefined): string {
@@ -117,6 +123,83 @@ function uniqueRiskFlags(flags: DexTokenCandidateRiskFlag[]): DexTokenCandidateR
   return [...new Set(flags)];
 }
 
+function percentGain(current: number | null, previous: number | null): number {
+  if (current === null || previous === null || previous <= 0) {
+    return 0;
+  }
+
+  return (current - previous) / previous;
+}
+
+function pairAgeHours(pairCreatedAt: string | null, now: Date): number | null {
+  return createdHoursAgo(pairCreatedAt, now);
+}
+
+export function scoreDexTokenPriority(
+  candidate: Pick<
+    DexTokenCandidateInput,
+    "priceUsd" | "liquidityUsd" | "volume24hUsd" | "pairCreatedAt"
+  >,
+  previous: Pick<
+    DexTokenCandidateRecord,
+    | "priceUsd"
+    | "liquidityUsd"
+    | "volume24hUsd"
+    | "firstPriceUsd"
+    | "firstLiquidityUsd"
+    | "firstVolume24hUsd"
+  > | null,
+  now: Date
+): Pick<DexTokenCandidateInput, "priorityScore" | "priorityReasons"> {
+  const reasons: DexTokenCandidatePriorityReason[] = [];
+  let score = 0;
+
+  if ((candidate.volume24hUsd ?? 0) >= 100_000) {
+    reasons.push("strong_volume");
+    score += 20;
+  }
+  if ((candidate.liquidityUsd ?? 0) >= 50_000) {
+    reasons.push("strong_liquidity");
+    score += 15;
+  }
+  if ((pairAgeHours(candidate.pairCreatedAt, now) ?? Number.POSITIVE_INFINITY) <= 24) {
+    reasons.push("fresh_launch");
+    score += 15;
+  }
+
+  if (previous) {
+    if (percentGain(candidate.priceUsd, previous.priceUsd) >= 0.25) {
+      reasons.push("price_up_since_last_check");
+      score += 20;
+    }
+    if (percentGain(candidate.volume24hUsd, previous.volume24hUsd) >= 0.5) {
+      reasons.push("volume_up_since_last_check");
+      score += 15;
+    }
+    if (percentGain(candidate.liquidityUsd, previous.liquidityUsd) >= 0.25) {
+      reasons.push("liquidity_up_since_last_check");
+      score += 10;
+    }
+    if (percentGain(candidate.priceUsd, previous.firstPriceUsd) >= 1) {
+      reasons.push("price_up_since_discovery");
+      score += 25;
+    }
+    if (percentGain(candidate.volume24hUsd, previous.firstVolume24hUsd) >= 1) {
+      reasons.push("volume_up_since_discovery");
+      score += 15;
+    }
+    if (percentGain(candidate.liquidityUsd, previous.firstLiquidityUsd) >= 0.75) {
+      reasons.push("liquidity_up_since_discovery");
+      score += 10;
+    }
+  }
+
+  return {
+    priorityScore: Math.max(0, Math.min(100, score)),
+    priorityReasons: [...new Set(reasons)]
+  };
+}
+
 export function buildDexTokenCandidate(
   signal: MemeSignalAnalysisRecord,
   pair: DexScreenerPair,
@@ -156,6 +239,7 @@ export function buildDexTokenCandidate(
   );
   const hoursAgo = createdHoursAgo(pairCreatedAt, options.now);
   const riskFlags: DexTokenCandidateRiskFlag[] = [];
+  const discoveredAt = options.now.toISOString();
 
   if ((liquidityUsd ?? 0) < options.minLiquidityUsd) {
     riskFlags.push("low_liquidity");
@@ -196,7 +280,18 @@ export function buildDexTokenCandidate(
     riskFlags: uniqueRiskFlags(riskFlags),
     matchedTerms,
     rawPayload: pair,
-    discoveredAt: options.now.toISOString()
+    discoveredAt,
+    lastCheckedAt: discoveredAt,
+    ...scoreDexTokenPriority(
+      {
+        priceUsd: asNumber(pair.priceUsd),
+        liquidityUsd,
+        volume24hUsd,
+        pairCreatedAt
+      },
+      null,
+      options.now
+    )
   };
 }
 

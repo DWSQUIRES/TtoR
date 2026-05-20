@@ -9,6 +9,7 @@ import type {
   DexDiscoveryRunRecord,
   DexDiscoveryStatus,
   DexTokenCandidateInput,
+  DexTokenCandidatePriorityReason,
   DexTokenCandidateRecord,
   DexTokenCandidateRiskFlag,
   HealthSnapshot,
@@ -134,6 +135,15 @@ function rowToDexTokenCandidate(row: Record<string, unknown>): DexTokenCandidate
     matchedTerms: parseJson<string[]>(row.matched_terms_json as string | null),
     rawPayload: parseJson<Record<string, unknown>>(row.raw_payload_json as string | null),
     discoveredAt: String(row.discovered_at),
+    lastCheckedAt: row.last_checked_at ? String(row.last_checked_at) : String(row.updated_at ?? row.discovered_at),
+    priorityScore: Number(row.priority_score ?? 0),
+    priorityReasons: parseJson<DexTokenCandidatePriorityReason[]>(row.priority_reasons_json as string | null),
+    firstPriceUsd: row.first_price_usd === null || row.first_price_usd === undefined ? null : Number(row.first_price_usd),
+    firstLiquidityUsd: row.first_liquidity_usd === null || row.first_liquidity_usd === undefined ? null : Number(row.first_liquidity_usd),
+    firstVolume24hUsd: row.first_volume_24h_usd === null || row.first_volume_24h_usd === undefined ? null : Number(row.first_volume_24h_usd),
+    previousPriceUsd: row.previous_price_usd === null || row.previous_price_usd === undefined ? null : Number(row.previous_price_usd),
+    previousLiquidityUsd: row.previous_liquidity_usd === null || row.previous_liquidity_usd === undefined ? null : Number(row.previous_liquidity_usd),
+    previousVolume24hUsd: row.previous_volume_24h_usd === null || row.previous_volume_24h_usd === undefined ? null : Number(row.previous_volume_24h_usd),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     signalScore: row.signal_score === null || row.signal_score === undefined ? null : Number(row.signal_score),
@@ -156,8 +166,8 @@ export class Repository implements PostRepository {
   private readonly memeSignalForPostStatement;
   private readonly signalsPendingDexDiscoveryStatement;
   private readonly insertDexDiscoveryRunStatement;
-  private readonly deleteDexTokenCandidatesForPostStatement;
   private readonly upsertDexTokenCandidateStatement;
+  private readonly dexCandidatesPendingRefreshStatement;
   private readonly dexDiscoveriesStatement;
   private readonly dexDiscoveryForPostStatement;
   private readonly latestPollStatement;
@@ -253,6 +263,15 @@ export class Repository implements PostRepository {
         matched_terms_json TEXT NOT NULL,
         raw_payload_json TEXT NOT NULL,
         discovered_at TEXT NOT NULL,
+        first_price_usd REAL,
+        first_liquidity_usd REAL,
+        first_volume_24h_usd REAL,
+        previous_price_usd REAL,
+        previous_liquidity_usd REAL,
+        previous_volume_24h_usd REAL,
+        last_checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        priority_score INTEGER NOT NULL DEFAULT 0,
+        priority_reasons_json TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (post_id, chain_id, pair_address)
@@ -260,7 +279,10 @@ export class Repository implements PostRepository {
 
       CREATE INDEX IF NOT EXISTS idx_dex_token_candidates_score
         ON dex_token_candidates(match_score DESC, discovered_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_dex_token_candidates_refresh
+        ON dex_token_candidates(last_checked_at ASC, priority_score DESC);
     `);
+    this.ensureDexTokenCandidateColumns();
 
     this.insertPostStatement = this.db.prepare(`
       INSERT OR IGNORE INTO posts (
@@ -424,11 +446,6 @@ export class Repository implements PostRepository {
       RETURNING *
     `);
 
-    this.deleteDexTokenCandidatesForPostStatement = this.db.prepare(`
-      DELETE FROM dex_token_candidates
-      WHERE post_id = ?
-    `);
-
     this.upsertDexTokenCandidateStatement = this.db.prepare(`
       INSERT INTO dex_token_candidates (
         post_id,
@@ -451,9 +468,18 @@ export class Repository implements PostRepository {
         matched_terms_json,
         raw_payload_json,
         discovered_at,
+        first_price_usd,
+        first_liquidity_usd,
+        first_volume_24h_usd,
+        previous_price_usd,
+        previous_liquidity_usd,
+        previous_volume_24h_usd,
+        last_checked_at,
+        priority_score,
+        priority_reasons_json,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(post_id, chain_id, pair_address) DO UPDATE SET
         dex_id = excluded.dex_id,
         base_token_address = excluded.base_token_address,
@@ -471,8 +497,26 @@ export class Repository implements PostRepository {
         risk_flags_json = excluded.risk_flags_json,
         matched_terms_json = excluded.matched_terms_json,
         raw_payload_json = excluded.raw_payload_json,
-        discovered_at = excluded.discovered_at,
+        previous_price_usd = dex_token_candidates.price_usd,
+        previous_liquidity_usd = dex_token_candidates.liquidity_usd,
+        previous_volume_24h_usd = dex_token_candidates.volume_24h_usd,
+        last_checked_at = excluded.last_checked_at,
+        priority_score = excluded.priority_score,
+        priority_reasons_json = excluded.priority_reasons_json,
         updated_at = excluded.updated_at
+    `);
+
+    this.dexCandidatesPendingRefreshStatement = this.db.prepare(`
+      SELECT
+        dex_token_candidates.*,
+        json_extract(meme_signal_analyses.analysis_json, '$.signalScore') AS signal_score,
+        json_extract(meme_signal_analyses.analysis_json, '$.narrative') AS narrative,
+        json_extract(meme_signal_analyses.analysis_json, '$.whySignal') AS why_signal
+      FROM dex_token_candidates
+      LEFT JOIN meme_signal_analyses ON meme_signal_analyses.post_id = dex_token_candidates.post_id
+      WHERE datetime(last_checked_at) <= datetime(?)
+      ORDER BY priority_score DESC, datetime(last_checked_at) ASC
+      LIMIT ?
     `);
 
     this.dexDiscoveriesStatement = this.db.prepare(`
@@ -484,7 +528,7 @@ export class Repository implements PostRepository {
       FROM dex_token_candidates
       JOIN meme_signal_analyses ON meme_signal_analyses.post_id = dex_token_candidates.post_id
       WHERE match_score >= ?
-      ORDER BY match_score DESC, COALESCE(liquidity_usd, 0) DESC, discovered_at DESC
+      ORDER BY priority_score DESC, match_score DESC, COALESCE(liquidity_usd, 0) DESC, discovered_at DESC
       LIMIT ?
     `);
 
@@ -497,7 +541,7 @@ export class Repository implements PostRepository {
       FROM dex_token_candidates
       LEFT JOIN meme_signal_analyses ON meme_signal_analyses.post_id = dex_token_candidates.post_id
       WHERE dex_token_candidates.post_id = ?
-      ORDER BY match_score DESC, COALESCE(liquidity_usd, 0) DESC, discovered_at DESC
+      ORDER BY priority_score DESC, match_score DESC, COALESCE(liquidity_usd, 0) DESC, discovered_at DESC
     `);
 
     this.latestPollStatement = this.db.prepare(`
@@ -523,6 +567,44 @@ export class Repository implements PostRepository {
 
   public close(): void {
     this.db.close();
+  }
+
+  private ensureDexTokenCandidateColumns(): void {
+    const rows = this.db.prepare("PRAGMA table_info(dex_token_candidates)").all() as Array<{ name: string }>;
+    const columns = new Set(rows.map((row) => row.name));
+    const migrations: Array<[string, string]> = [
+      ["first_price_usd", "ALTER TABLE dex_token_candidates ADD COLUMN first_price_usd REAL"],
+      ["first_liquidity_usd", "ALTER TABLE dex_token_candidates ADD COLUMN first_liquidity_usd REAL"],
+      ["first_volume_24h_usd", "ALTER TABLE dex_token_candidates ADD COLUMN first_volume_24h_usd REAL"],
+      ["previous_price_usd", "ALTER TABLE dex_token_candidates ADD COLUMN previous_price_usd REAL"],
+      ["previous_liquidity_usd", "ALTER TABLE dex_token_candidates ADD COLUMN previous_liquidity_usd REAL"],
+      ["previous_volume_24h_usd", "ALTER TABLE dex_token_candidates ADD COLUMN previous_volume_24h_usd REAL"],
+      ["last_checked_at", "ALTER TABLE dex_token_candidates ADD COLUMN last_checked_at TEXT"],
+      ["priority_score", "ALTER TABLE dex_token_candidates ADD COLUMN priority_score INTEGER NOT NULL DEFAULT 0"],
+      ["priority_reasons_json", "ALTER TABLE dex_token_candidates ADD COLUMN priority_reasons_json TEXT NOT NULL DEFAULT '[]'"]
+    ];
+
+    for (const [column, statement] of migrations) {
+      if (!columns.has(column)) {
+        this.db.exec(statement);
+      }
+    }
+
+    this.db.exec(`
+      UPDATE dex_token_candidates
+      SET
+        first_price_usd = COALESCE(first_price_usd, price_usd),
+        first_liquidity_usd = COALESCE(first_liquidity_usd, liquidity_usd),
+        first_volume_24h_usd = COALESCE(first_volume_24h_usd, volume_24h_usd),
+        last_checked_at = COALESCE(last_checked_at, updated_at, discovered_at)
+      WHERE first_price_usd IS NULL
+        OR first_liquidity_usd IS NULL
+        OR first_volume_24h_usd IS NULL
+        OR last_checked_at IS NULL;
+
+      CREATE INDEX IF NOT EXISTS idx_dex_token_candidates_refresh
+        ON dex_token_candidates(last_checked_at ASC, priority_score DESC);
+    `);
   }
 
   public recordPollRun(input: PollRunInput): { newPostsCount: number; latestPostId: string | null } {
@@ -655,7 +737,6 @@ export class Repository implements PostRepository {
     this.db.exec("BEGIN");
 
     try {
-      this.deleteDexTokenCandidatesForPostStatement.run(postId);
       for (const candidate of candidates) {
         this.upsertDexTokenCandidateStatement.run(
           postId,
@@ -678,6 +759,15 @@ export class Repository implements PostRepository {
           JSON.stringify(candidate.matchedTerms),
           JSON.stringify(candidate.rawPayload),
           candidate.discoveredAt,
+          candidate.priceUsd,
+          candidate.liquidityUsd,
+          candidate.volume24hUsd,
+          null,
+          null,
+          null,
+          candidate.lastCheckedAt,
+          candidate.priorityScore,
+          JSON.stringify(candidate.priorityReasons),
           candidate.discoveredAt,
           candidate.discoveredAt
         );
@@ -687,6 +777,18 @@ export class Repository implements PostRepository {
       this.db.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  public getDexCandidatesPendingRefresh(options: {
+    limit: number;
+    ttlMinutes: number;
+  }): DexTokenCandidateRecord[] {
+    const staleBefore = new Date(Date.now() - options.ttlMinutes * 60_000).toISOString();
+    const rows = this.dexCandidatesPendingRefreshStatement.all(
+      staleBefore,
+      options.limit
+    ) as Record<string, unknown>[];
+    return rows.map(rowToDexTokenCandidate);
   }
 
   public getDexDiscoveries(options: { minScore: number; limit: number }): DexTokenCandidateRecord[] {

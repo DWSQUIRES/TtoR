@@ -38,6 +38,8 @@ export interface AppConfig {
   dexDiscoveryMaxSignalsPerRun: number;
   dexDiscoveryMaxQueriesPerSignal: number;
   dexDiscoveryCacheTtlMinutes: number;
+  dexCandidateRefreshTtlMinutes: number;
+  dexCandidateRefreshLimit: number;
   dexDiscoveryMinLiquidityUsd: number;
   dexDiscoveryMinVolume24hUsd: number;
   dexScreenerBaseUrl: string;
@@ -171,6 +173,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     dexDiscoveryMaxSignalsPerRun: clampInteger(parsePositiveInteger(env.DEX_DISCOVERY_MAX_SIGNALS_PER_RUN, 5), 1, 50),
     dexDiscoveryMaxQueriesPerSignal: clampInteger(parsePositiveInteger(env.DEX_DISCOVERY_MAX_QUERIES_PER_SIGNAL, 8), 1, 20),
     dexDiscoveryCacheTtlMinutes: clampInteger(parsePositiveInteger(env.DEX_DISCOVERY_CACHE_TTL_MINUTES, 30), 1, 1440),
+    dexCandidateRefreshTtlMinutes: clampInteger(parsePositiveInteger(env.DEX_CANDIDATE_REFRESH_TTL_MINUTES, 10), 1, 1440),
+    dexCandidateRefreshLimit: clampInteger(parsePositiveInteger(env.DEX_CANDIDATE_REFRESH_LIMIT, 100), 1, 500),
     dexDiscoveryMinLiquidityUsd: parseNonNegativeNumber(env.DEX_DISCOVERY_MIN_LIQUIDITY_USD, 5000),
     dexDiscoveryMinVolume24hUsd: parseNonNegativeNumber(env.DEX_DISCOVERY_MIN_VOLUME_24H_USD, 1000),
     dexScreenerBaseUrl: env.DEXSCREENER_BASE_URL ?? "https://api.dexscreener.com"

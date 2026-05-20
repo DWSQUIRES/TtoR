@@ -33,6 +33,10 @@ export interface PostRepository {
   }): Awaitable<MemeSignalAnalysisRecord[]>;
   saveDexDiscoveryRun(input: DexDiscoveryRunInput): Awaitable<DexDiscoveryRunRecord>;
   upsertDexTokenCandidates(postId: string, candidates: DexTokenCandidateInput[]): Awaitable<void>;
+  getDexCandidatesPendingRefresh(options: {
+    limit: number;
+    ttlMinutes: number;
+  }): Awaitable<DexTokenCandidateRecord[]>;
   getDexDiscoveries(options: { minScore: number; limit: number }): Awaitable<DexTokenCandidateRecord[]>;
   getDexDiscoveryForPost(postId: string): Awaitable<DexTokenCandidateRecord[]>;
   getLatestPoll(): Awaitable<PollRunRecord | null>;
