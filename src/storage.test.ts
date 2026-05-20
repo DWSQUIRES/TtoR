@@ -269,6 +269,42 @@ describe("Repository", () => {
     });
     expect(repository.getDexDiscoveryForPost("signal-post")).toHaveLength(2);
     expect(repository.getDexCandidatesPendingRefresh({ limit: 10, ttlMinutes: 1 })).toHaveLength(2);
+    expect(repository.getDexCandidatesPendingRugCheck({ limit: 10, ttlMinutes: 1 })).toHaveLength(2);
+    const riskSnapshot = repository.saveDexRugpullRisk({
+      postId: post.postId,
+      chainId: "solana",
+      pairAddress: "pair-1",
+      baseTokenAddress: "token-1",
+      rugpullScore: 65,
+      previousRugpullScore: null,
+      rugpullLevel: "high",
+      rugpullTrend: "stable",
+      rugpullFlags: ["high_fdv_liquidity"],
+      rugpullDetails: [
+        {
+          flag: "high_fdv_liquidity",
+          severity: "high",
+          points: 20,
+          description: "FDV is high compared with liquidity."
+        }
+      ],
+      rawPayload: {
+        fdvLiquidityRatio: 120
+      },
+      checkedAt: "2026-05-15T11:00:00.000Z"
+    });
+    expect(riskSnapshot).toMatchObject({
+      postId: post.postId,
+      rugpullScore: 65,
+      rugpullLevel: "high"
+    });
+    expect(repository.getDexDiscoveryForPost("signal-post")[0]).toMatchObject({
+      rugpullScore: 65,
+      previousRugpullScore: 0,
+      rugpullLevel: "high",
+      rugpullFlags: ["high_fdv_liquidity"],
+      lastRugCheckedAt: "2026-05-15T11:00:00.000Z"
+    });
     expect(repository.getSignalsPendingDexDiscovery({ minScore: 70, limit: 10, ttlMinutes: 1_000_000 })).toHaveLength(0);
 
     repository.close();

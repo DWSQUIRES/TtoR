@@ -10,12 +10,15 @@ import type {
 import type { DexScreenerClient, DexScreenerPair } from "./dexScreenerClient.js";
 import { buildDexTokenCandidate, normalizeDexPairs, scoreDexTokenPriority } from "./scoring.js";
 import { buildDexDiscoveryQueryTerms } from "./queryTerms.js";
+import { scoreDexRugpullRisk } from "./rugpullScoring.js";
 
 export interface DexDiscoveryRunSummary {
   analyzedSignalCount: number;
   candidateCount: number;
   refreshedCandidateCount: number;
   highPriorityCount: number;
+  rugCheckedCandidateCount: number;
+  highRugRiskCount: number;
   errorCount: number;
 }
 
@@ -67,6 +70,8 @@ export class DexDiscoveryService {
       | "dexDiscoveryCacheTtlMinutes"
       | "dexCandidateRefreshTtlMinutes"
       | "dexCandidateRefreshLimit"
+      | "dexRugCheckTtlMinutes"
+      | "dexRugCheckLimit"
       | "dexDiscoveryMinLiquidityUsd"
       | "dexDiscoveryMinVolume24hUsd"
     >,
@@ -78,6 +83,7 @@ export class DexDiscoveryService {
 
   public async discoverPendingSignals(): Promise<DexDiscoveryRunSummary> {
     const refreshSummary = await this.refreshTrackedCandidates();
+    const rugSummary = await this.refreshRugpullRisks();
     const signals = await this.repository.getSignalsPendingDexDiscovery({
       minScore: this.config.dexDiscoveryMinSignalScore,
       limit: this.config.dexDiscoveryMaxSignalsPerRun,
@@ -147,6 +153,8 @@ export class DexDiscoveryService {
       candidateCount,
       refreshedCandidateCount: refreshSummary.refreshedCandidateCount,
       highPriorityCount,
+      rugCheckedCandidateCount: rugSummary.rugCheckedCandidateCount,
+      highRugRiskCount: rugSummary.highRugRiskCount,
       errorCount
     };
   }
@@ -268,6 +276,39 @@ export class DexDiscoveryService {
     return {
       refreshedCandidateCount,
       highPriorityCount
+    };
+  }
+
+  private async refreshRugpullRisks(): Promise<Pick<DexDiscoveryRunSummary, "rugCheckedCandidateCount" | "highRugRiskCount">> {
+    const candidates = await this.repository.getDexCandidatesPendingRugCheck({
+      limit: this.config.dexRugCheckLimit,
+      ttlMinutes: this.config.dexRugCheckTtlMinutes
+    });
+    let rugCheckedCandidateCount = 0;
+    let highRugRiskCount = 0;
+
+    for (const candidate of candidates) {
+      try {
+        const risk = scoreDexRugpullRisk(candidate, this.now());
+        await this.repository.saveDexRugpullRisk(risk);
+        rugCheckedCandidateCount += 1;
+        if (risk.rugpullScore >= 50) {
+          highRugRiskCount += 1;
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown DEX rug-risk error";
+        this.logger.warn("DEX rug-risk check failed", {
+          postId: candidate.postId,
+          chainId: candidate.chainId,
+          pairAddress: candidate.pairAddress,
+          message
+        });
+      }
+    }
+
+    return {
+      rugCheckedCandidateCount,
+      highRugRiskCount
     };
   }
 }

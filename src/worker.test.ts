@@ -54,6 +54,8 @@ function buildConfig(): AppConfig {
     dexDiscoveryCacheTtlMinutes: 30,
     dexCandidateRefreshTtlMinutes: 10,
     dexCandidateRefreshLimit: 100,
+    dexRugCheckTtlMinutes: 10,
+    dexRugCheckLimit: 100,
     dexDiscoveryMinLiquidityUsd: 5000,
     dexDiscoveryMinVolume24hUsd: 1000,
     dexScreenerBaseUrl: "https://api.dexscreener.com"

@@ -6,6 +6,12 @@ import type {
   DexDiscoveryRunInput,
   DexDiscoveryRunRecord,
   DexDiscoveryStatus,
+  DexRugpullDetail,
+  DexRugpullFlag,
+  DexRugpullLevel,
+  DexRugpullRiskInput,
+  DexRugpullRiskSnapshotRecord,
+  DexRugpullTrend,
   DexTokenCandidateInput,
   DexTokenCandidatePriorityReason,
   DexTokenCandidateRecord,
@@ -155,11 +161,36 @@ function rowToDexTokenCandidate(row: Record<string, unknown>): DexTokenCandidate
     previousPriceUsd: row.previous_price_usd === null || row.previous_price_usd === undefined ? null : Number(row.previous_price_usd),
     previousLiquidityUsd: row.previous_liquidity_usd === null || row.previous_liquidity_usd === undefined ? null : Number(row.previous_liquidity_usd),
     previousVolume24hUsd: row.previous_volume_24h_usd === null || row.previous_volume_24h_usd === undefined ? null : Number(row.previous_volume_24h_usd),
+    rugpullScore: Number(row.rugpull_score ?? 0),
+    previousRugpullScore: row.previous_rugpull_score === null || row.previous_rugpull_score === undefined ? null : Number(row.previous_rugpull_score),
+    rugpullLevel: String(row.rugpull_level ?? "low") as DexRugpullLevel,
+    rugpullFlags: parseJson<DexRugpullFlag[]>(row.rugpull_flags_json, []),
+    rugpullDetails: parseJson<DexRugpullDetail[]>(row.rugpull_details_json, []),
+    rugpullTrend: String(row.rugpull_trend ?? "stable") as DexRugpullTrend,
+    lastRugCheckedAt: row.last_rug_checked_at ? toIso(row.last_rug_checked_at) : null,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
     signalScore: row.signal_score === null || row.signal_score === undefined ? null : Number(row.signal_score),
     narrative: row.narrative ? String(row.narrative) : null,
     whySignal: row.why_signal ? String(row.why_signal) : null
+  };
+}
+
+function rowToDexRugpullRiskSnapshot(row: Record<string, unknown>): DexRugpullRiskSnapshotRecord {
+  return {
+    id: Number(row.id),
+    postId: String(row.post_id),
+    chainId: String(row.chain_id),
+    pairAddress: String(row.pair_address),
+    baseTokenAddress: String(row.base_token_address),
+    rugpullScore: Number(row.rugpull_score),
+    previousRugpullScore: row.previous_rugpull_score === null || row.previous_rugpull_score === undefined ? null : Number(row.previous_rugpull_score),
+    rugpullLevel: String(row.rugpull_level) as DexRugpullLevel,
+    rugpullTrend: String(row.rugpull_trend) as DexRugpullTrend,
+    rugpullFlags: parseJson<DexRugpullFlag[]>(row.rugpull_flags_json, []),
+    rugpullDetails: parseJson<DexRugpullDetail[]>(row.rugpull_details_json, []),
+    rawPayload: parseJson<Record<string, unknown>>(row.raw_payload_json, {}),
+    checkedAt: toIso(row.checked_at)
   };
 }
 
@@ -551,6 +582,81 @@ export class PostgresRepository implements PostRepository {
     return rows.map((row) => rowToDexTokenCandidate(row as Record<string, unknown>));
   }
 
+  public async getDexCandidatesPendingRugCheck(options: {
+    limit: number;
+    ttlMinutes: number;
+  }): Promise<DexTokenCandidateRecord[]> {
+    await this.ensureInitialized();
+    const rows = await this.sql`
+      SELECT
+        dex_token_candidates.*,
+        (meme_signal_analyses.analysis_json->>'signalScore')::integer AS signal_score,
+        meme_signal_analyses.analysis_json->>'narrative' AS narrative,
+        meme_signal_analyses.analysis_json->>'whySignal' AS why_signal
+      FROM dex_token_candidates
+      LEFT JOIN meme_signal_analyses ON meme_signal_analyses.post_id = dex_token_candidates.post_id
+      WHERE last_rug_checked_at IS NULL
+        OR last_rug_checked_at <= NOW() - (${options.ttlMinutes}::text || ' minutes')::interval
+      ORDER BY rugpull_score DESC, COALESCE(last_rug_checked_at, discovered_at) ASC
+      LIMIT ${options.limit}
+    `;
+    return rows.map((row) => rowToDexTokenCandidate(row as Record<string, unknown>));
+  }
+
+  public async saveDexRugpullRisk(input: DexRugpullRiskInput): Promise<DexRugpullRiskSnapshotRecord> {
+    await this.ensureInitialized();
+    const row = await this.sql.begin(async (transaction) => {
+      await transaction`
+        UPDATE dex_token_candidates
+        SET
+          previous_rugpull_score = rugpull_score,
+          rugpull_score = ${input.rugpullScore},
+          rugpull_level = ${input.rugpullLevel},
+          rugpull_flags_json = ${jsonb(transaction, input.rugpullFlags)},
+          rugpull_details_json = ${jsonb(transaction, input.rugpullDetails)},
+          rugpull_trend = ${input.rugpullTrend},
+          last_rug_checked_at = ${input.checkedAt},
+          updated_at = ${input.checkedAt}
+        WHERE post_id = ${input.postId}
+          AND chain_id = ${input.chainId}
+          AND pair_address = ${input.pairAddress}
+      `;
+
+      const rows = await transaction`
+        INSERT INTO dex_rugpull_risk_snapshots (
+          post_id,
+          chain_id,
+          pair_address,
+          base_token_address,
+          rugpull_score,
+          previous_rugpull_score,
+          rugpull_level,
+          rugpull_trend,
+          rugpull_flags_json,
+          rugpull_details_json,
+          raw_payload_json,
+          checked_at
+        ) VALUES (
+          ${input.postId},
+          ${input.chainId},
+          ${input.pairAddress},
+          ${input.baseTokenAddress},
+          ${input.rugpullScore},
+          ${input.previousRugpullScore},
+          ${input.rugpullLevel},
+          ${input.rugpullTrend},
+          ${jsonb(transaction, input.rugpullFlags)},
+          ${jsonb(transaction, input.rugpullDetails)},
+          ${jsonb(transaction, input.rawPayload)},
+          ${input.checkedAt}
+        )
+        RETURNING *
+      `;
+      return rows[0] as Record<string, unknown>;
+    });
+    return rowToDexRugpullRiskSnapshot(row);
+  }
+
   public async getDexDiscoveries(options: { minScore: number; limit: number }): Promise<DexTokenCandidateRecord[]> {
     await this.ensureInitialized();
     const rows = await this.sql`
@@ -726,6 +832,13 @@ export class PostgresRepository implements PostRepository {
         last_checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         priority_score INTEGER NOT NULL DEFAULT 0,
         priority_reasons_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        rugpull_score INTEGER NOT NULL DEFAULT 0,
+        previous_rugpull_score INTEGER,
+        rugpull_level TEXT NOT NULL DEFAULT 'low',
+        rugpull_flags_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        rugpull_details_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        rugpull_trend TEXT NOT NULL DEFAULT 'stable',
+        last_rug_checked_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         PRIMARY KEY (post_id, chain_id, pair_address)
@@ -739,6 +852,31 @@ export class PostgresRepository implements PostRepository {
     await this.sql`
       CREATE INDEX IF NOT EXISTS idx_dex_token_candidates_refresh
       ON dex_token_candidates(last_checked_at ASC, priority_score DESC)
+    `;
+    await this.sql`
+      CREATE INDEX IF NOT EXISTS idx_dex_token_candidates_rug_check
+      ON dex_token_candidates(last_rug_checked_at ASC, rugpull_score DESC)
+    `;
+    await this.sql`
+      CREATE TABLE IF NOT EXISTS dex_rugpull_risk_snapshots (
+        id BIGSERIAL PRIMARY KEY,
+        post_id TEXT NOT NULL,
+        chain_id TEXT NOT NULL,
+        pair_address TEXT NOT NULL,
+        base_token_address TEXT NOT NULL,
+        rugpull_score INTEGER NOT NULL,
+        previous_rugpull_score INTEGER,
+        rugpull_level TEXT NOT NULL,
+        rugpull_trend TEXT NOT NULL,
+        rugpull_flags_json JSONB NOT NULL,
+        rugpull_details_json JSONB NOT NULL,
+        raw_payload_json JSONB NOT NULL,
+        checked_at TIMESTAMPTZ NOT NULL
+      )
+    `;
+    await this.sql`
+      CREATE INDEX IF NOT EXISTS idx_dex_rugpull_snapshots_candidate
+      ON dex_rugpull_risk_snapshots(post_id, chain_id, pair_address, checked_at DESC)
     `;
     await this.normalizeLegacyJsonbRows();
 
@@ -755,6 +893,13 @@ export class PostgresRepository implements PostRepository {
     await this.sql`ALTER TABLE dex_token_candidates ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ`;
     await this.sql`ALTER TABLE dex_token_candidates ADD COLUMN IF NOT EXISTS priority_score INTEGER NOT NULL DEFAULT 0`;
     await this.sql`ALTER TABLE dex_token_candidates ADD COLUMN IF NOT EXISTS priority_reasons_json JSONB NOT NULL DEFAULT '[]'::jsonb`;
+    await this.sql`ALTER TABLE dex_token_candidates ADD COLUMN IF NOT EXISTS rugpull_score INTEGER NOT NULL DEFAULT 0`;
+    await this.sql`ALTER TABLE dex_token_candidates ADD COLUMN IF NOT EXISTS previous_rugpull_score INTEGER`;
+    await this.sql`ALTER TABLE dex_token_candidates ADD COLUMN IF NOT EXISTS rugpull_level TEXT NOT NULL DEFAULT 'low'`;
+    await this.sql`ALTER TABLE dex_token_candidates ADD COLUMN IF NOT EXISTS rugpull_flags_json JSONB NOT NULL DEFAULT '[]'::jsonb`;
+    await this.sql`ALTER TABLE dex_token_candidates ADD COLUMN IF NOT EXISTS rugpull_details_json JSONB NOT NULL DEFAULT '[]'::jsonb`;
+    await this.sql`ALTER TABLE dex_token_candidates ADD COLUMN IF NOT EXISTS rugpull_trend TEXT NOT NULL DEFAULT 'stable'`;
+    await this.sql`ALTER TABLE dex_token_candidates ADD COLUMN IF NOT EXISTS last_rug_checked_at TIMESTAMPTZ`;
     await this.sql`
       UPDATE dex_token_candidates
       SET
@@ -769,6 +914,27 @@ export class PostgresRepository implements PostRepository {
     `;
     await this.sql`ALTER TABLE dex_token_candidates ALTER COLUMN last_checked_at SET NOT NULL`;
     await this.sql`ALTER TABLE dex_token_candidates ALTER COLUMN last_checked_at SET DEFAULT NOW()`;
+    await this.sql`
+      CREATE TABLE IF NOT EXISTS dex_rugpull_risk_snapshots (
+        id BIGSERIAL PRIMARY KEY,
+        post_id TEXT NOT NULL,
+        chain_id TEXT NOT NULL,
+        pair_address TEXT NOT NULL,
+        base_token_address TEXT NOT NULL,
+        rugpull_score INTEGER NOT NULL,
+        previous_rugpull_score INTEGER,
+        rugpull_level TEXT NOT NULL,
+        rugpull_trend TEXT NOT NULL,
+        rugpull_flags_json JSONB NOT NULL,
+        rugpull_details_json JSONB NOT NULL,
+        raw_payload_json JSONB NOT NULL,
+        checked_at TIMESTAMPTZ NOT NULL
+      )
+    `;
+    await this.sql`
+      CREATE INDEX IF NOT EXISTS idx_dex_rugpull_snapshots_candidate
+      ON dex_rugpull_risk_snapshots(post_id, chain_id, pair_address, checked_at DESC)
+    `;
   }
 
   private async normalizeLegacyJsonbRows(): Promise<void> {
@@ -814,6 +980,31 @@ export class PostgresRepository implements PostRepository {
     `;
     await this.sql`
       UPDATE dex_token_candidates
+      SET raw_payload_json = (raw_payload_json #>> '{}')::jsonb
+      WHERE jsonb_typeof(raw_payload_json) = 'string'
+    `;
+    await this.sql`
+      UPDATE dex_token_candidates
+      SET rugpull_flags_json = (rugpull_flags_json #>> '{}')::jsonb
+      WHERE jsonb_typeof(rugpull_flags_json) = 'string'
+    `;
+    await this.sql`
+      UPDATE dex_token_candidates
+      SET rugpull_details_json = (rugpull_details_json #>> '{}')::jsonb
+      WHERE jsonb_typeof(rugpull_details_json) = 'string'
+    `;
+    await this.sql`
+      UPDATE dex_rugpull_risk_snapshots
+      SET rugpull_flags_json = (rugpull_flags_json #>> '{}')::jsonb
+      WHERE jsonb_typeof(rugpull_flags_json) = 'string'
+    `;
+    await this.sql`
+      UPDATE dex_rugpull_risk_snapshots
+      SET rugpull_details_json = (rugpull_details_json #>> '{}')::jsonb
+      WHERE jsonb_typeof(rugpull_details_json) = 'string'
+    `;
+    await this.sql`
+      UPDATE dex_rugpull_risk_snapshots
       SET raw_payload_json = (raw_payload_json #>> '{}')::jsonb
       WHERE jsonb_typeof(raw_payload_json) = 'string'
     `;

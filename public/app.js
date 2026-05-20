@@ -181,6 +181,34 @@ function renderPriorityReasons(candidate) {
     .join("");
 }
 
+function rugClass(level) {
+  const normalized = String(level ?? "low").toLowerCase();
+  if (normalized === "critical" || normalized === "high") {
+    return "danger";
+  }
+  if (normalized === "medium") {
+    return "warning";
+  }
+  return "safe";
+}
+
+function renderRugDetails(candidate) {
+  const details = Array.isArray(candidate.rugpullDetails) ? candidate.rugpullDetails : [];
+  const flags = Array.isArray(candidate.rugpullFlags) ? candidate.rugpullFlags : [];
+  const labels = details.length
+    ? details.map((detail) => detail.description || detail.flag)
+    : flags.map((flag) => String(flag).replaceAll("_", " "));
+
+  if (labels.length === 0) {
+    return '<span class="tag safe">no rug flags</span>';
+  }
+
+  return labels
+    .slice(0, 3)
+    .map((label) => `<span class="tag rug-flag">${escapeHtml(label)}</span>`)
+    .join("");
+}
+
 function metricGain(current, previous) {
   const currentNumber = Number(current);
   const previousNumber = Number(previous);
@@ -484,6 +512,9 @@ function renderDexCoinCard(candidate) {
     : "";
   const priceGain = formatGain(metricGain(candidate.priceUsd, candidate.previousPriceUsd));
   const discoveryGain = formatGain(metricGain(candidate.priceUsd, candidate.firstPriceUsd));
+  const rugLevel = candidate.rugpullLevel ?? "low";
+  const rugScore = Number.isFinite(Number(candidate.rugpullScore)) ? Number(candidate.rugpullScore) : 0;
+  const rugTrend = candidate.rugpullTrend ?? "stable";
 
   card.innerHTML = `
     <div class="coin-card-top">
@@ -495,6 +526,8 @@ function renderDexCoinCard(candidate) {
     </div>
     <div class="tag-row compact">
       ${highPriority ? `<span class="tag priority">high priority ${escapeHtml(candidate.priorityScore ?? 0)}</span>` : ""}
+      <span class="tag rug-risk ${rugClass(rugLevel)}">rug ${escapeHtml(rugScore)} ${escapeHtml(rugLevel)}</span>
+      <span class="tag">risk ${escapeHtml(rugTrend)}</span>
       <span class="tag">liq ${escapeHtml(formatUsd(candidate.liquidityUsd))}</span>
       <span class="tag">24h ${escapeHtml(formatUsd(candidate.volume24hUsd))}</span>
       <span class="tag">fdv ${escapeHtml(formatUsd(candidate.fdv))}</span>
@@ -503,6 +536,7 @@ function renderDexCoinCard(candidate) {
       ${candidate.lastCheckedAt ? `<span class="tag">checked ${escapeHtml(formatRelative(candidate.lastCheckedAt))}</span>` : ""}
       ${matched}
       ${renderPriorityReasons(candidate)}
+      ${renderRugDetails(candidate)}
       ${renderRiskFlags(candidate.riskFlags)}
     </div>
     <a class="text-link" href="${escapeHtml(candidate.url)}" target="_blank" rel="noreferrer">Open DexScreener</a>

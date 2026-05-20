@@ -4,6 +4,8 @@ import type {
   HealthSnapshot,
   DexDiscoveryRunInput,
   DexDiscoveryRunRecord,
+  DexRugpullRiskInput,
+  DexRugpullRiskSnapshotRecord,
   DexTokenCandidateInput,
   DexTokenCandidateRecord,
   MemeSignalAnalysisInput,
@@ -37,6 +39,11 @@ export interface PostRepository {
     limit: number;
     ttlMinutes: number;
   }): Awaitable<DexTokenCandidateRecord[]>;
+  getDexCandidatesPendingRugCheck(options: {
+    limit: number;
+    ttlMinutes: number;
+  }): Awaitable<DexTokenCandidateRecord[]>;
+  saveDexRugpullRisk(input: DexRugpullRiskInput): Awaitable<DexRugpullRiskSnapshotRecord>;
   getDexDiscoveries(options: { minScore: number; limit: number }): Awaitable<DexTokenCandidateRecord[]>;
   getDexDiscoveryForPost(postId: string): Awaitable<DexTokenCandidateRecord[]>;
   getLatestPoll(): Awaitable<PollRunRecord | null>;

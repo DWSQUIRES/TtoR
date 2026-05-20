@@ -18,6 +18,8 @@ describe("loadConfig", () => {
     expect(defaults.dexDiscoveryMinSignalScore).toBe(70);
     expect(defaults.dexCandidateRefreshTtlMinutes).toBe(10);
     expect(defaults.dexCandidateRefreshLimit).toBe(100);
+    expect(defaults.dexRugCheckTtlMinutes).toBe(10);
+    expect(defaults.dexRugCheckLimit).toBe(100);
     expect(defaults.dexScreenerBaseUrl).toBe("https://api.dexscreener.com");
 
     const config = loadConfig({
@@ -28,6 +30,8 @@ describe("loadConfig", () => {
       DEX_DISCOVERY_CACHE_TTL_MINUTES: "45",
       DEX_CANDIDATE_REFRESH_TTL_MINUTES: "7",
       DEX_CANDIDATE_REFRESH_LIMIT: "44",
+      DEX_RUG_CHECK_TTL_MINUTES: "11",
+      DEX_RUG_CHECK_LIMIT: "55",
       DEX_DISCOVERY_MIN_LIQUIDITY_USD: "2500.5",
       DEX_DISCOVERY_MIN_VOLUME_24H_USD: "750",
       DEXSCREENER_BASE_URL: "https://example.test"
@@ -40,6 +44,8 @@ describe("loadConfig", () => {
     expect(config.dexDiscoveryCacheTtlMinutes).toBe(45);
     expect(config.dexCandidateRefreshTtlMinutes).toBe(7);
     expect(config.dexCandidateRefreshLimit).toBe(44);
+    expect(config.dexRugCheckTtlMinutes).toBe(11);
+    expect(config.dexRugCheckLimit).toBe(55);
     expect(config.dexDiscoveryMinLiquidityUsd).toBe(2500.5);
     expect(config.dexDiscoveryMinVolume24hUsd).toBe(750);
     expect(config.dexScreenerBaseUrl).toBe("https://example.test");

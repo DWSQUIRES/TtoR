@@ -501,6 +501,23 @@ select:focus {
   background: #d9f1e6;
 }
 
+.tag.rug-risk.safe,
+.tag.safe {
+  color: #0c5a40;
+  background: #d9f1e6;
+}
+
+.tag.rug-risk.warning {
+  color: var(--warn);
+  background: #f5e1bf;
+}
+
+.tag.rug-risk.danger,
+.tag.rug-flag {
+  color: var(--danger);
+  background: #f7dcd7;
+}
+
 .tag.error {
   color: var(--danger);
   background: #f7dcd7;

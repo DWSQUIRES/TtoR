@@ -129,6 +129,8 @@ DEX_DISCOVERY_MAX_QUERIES_PER_SIGNAL=8
 DEX_DISCOVERY_CACHE_TTL_MINUTES=30
 DEX_CANDIDATE_REFRESH_TTL_MINUTES=10
 DEX_CANDIDATE_REFRESH_LIMIT=100
+DEX_RUG_CHECK_TTL_MINUTES=10
+DEX_RUG_CHECK_LIMIT=100
 DEX_DISCOVERY_MIN_LIQUIDITY_USD=5000
 DEX_DISCOVERY_MIN_VOLUME_24H_USD=1000
 DEXSCREENER_BASE_URL=https://api.dexscreener.com
@@ -140,7 +142,7 @@ Run locally:
 npm run dex-discovery
 ```
 
-Each run refreshes stale known pairs by exact DexScreener pair address and re-searches stale narrative signals after `DEX_DISCOVERY_CACHE_TTL_MINUTES`, so later launches can be picked up. Tokens with growing price, volume, liquidity, or already strong market activity receive priority reasons shown in the dashboard.
+Each run refreshes stale known pairs by exact DexScreener pair address, recalculates no-key rug-risk scores for stale candidates, and re-searches stale narrative signals after `DEX_DISCOVERY_CACHE_TTL_MINUTES`, so later launches can be picked up. Tokens with growing price, volume, liquidity, or already strong market activity receive priority reasons shown in the dashboard; tokens with liquidity, FDV/liquidity, volume/liquidity, price-collapse, metadata, or age red flags receive rug-risk scores and details.
 
 On Vercel, `/api/cron/dex-discovery` is scheduled in `vercel.json` every 10 minutes. External schedulers can call the same path with the `Authorization: Bearer <CRON_SECRET>` header.
 

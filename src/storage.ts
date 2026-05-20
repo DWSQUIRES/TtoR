@@ -8,6 +8,12 @@ import type {
   DexDiscoveryRunInput,
   DexDiscoveryRunRecord,
   DexDiscoveryStatus,
+  DexRugpullFlag,
+  DexRugpullLevel,
+  DexRugpullRiskInput,
+  DexRugpullRiskSnapshotRecord,
+  DexRugpullTrend,
+  DexRugpullDetail,
   DexTokenCandidateInput,
   DexTokenCandidatePriorityReason,
   DexTokenCandidateRecord,
@@ -144,11 +150,36 @@ function rowToDexTokenCandidate(row: Record<string, unknown>): DexTokenCandidate
     previousPriceUsd: row.previous_price_usd === null || row.previous_price_usd === undefined ? null : Number(row.previous_price_usd),
     previousLiquidityUsd: row.previous_liquidity_usd === null || row.previous_liquidity_usd === undefined ? null : Number(row.previous_liquidity_usd),
     previousVolume24hUsd: row.previous_volume_24h_usd === null || row.previous_volume_24h_usd === undefined ? null : Number(row.previous_volume_24h_usd),
+    rugpullScore: Number(row.rugpull_score ?? 0),
+    previousRugpullScore: row.previous_rugpull_score === null || row.previous_rugpull_score === undefined ? null : Number(row.previous_rugpull_score),
+    rugpullLevel: String(row.rugpull_level ?? "low") as DexRugpullLevel,
+    rugpullFlags: parseJson<DexRugpullFlag[]>(row.rugpull_flags_json as string | null),
+    rugpullDetails: parseJson<DexRugpullDetail[]>(row.rugpull_details_json as string | null),
+    rugpullTrend: String(row.rugpull_trend ?? "stable") as DexRugpullTrend,
+    lastRugCheckedAt: row.last_rug_checked_at ? String(row.last_rug_checked_at) : null,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     signalScore: row.signal_score === null || row.signal_score === undefined ? null : Number(row.signal_score),
     narrative: row.narrative ? String(row.narrative) : null,
     whySignal: row.why_signal ? String(row.why_signal) : null
+  };
+}
+
+function rowToDexRugpullRiskSnapshot(row: Record<string, unknown>): DexRugpullRiskSnapshotRecord {
+  return {
+    id: Number(row.id),
+    postId: String(row.post_id),
+    chainId: String(row.chain_id),
+    pairAddress: String(row.pair_address),
+    baseTokenAddress: String(row.base_token_address),
+    rugpullScore: Number(row.rugpull_score),
+    previousRugpullScore: row.previous_rugpull_score === null || row.previous_rugpull_score === undefined ? null : Number(row.previous_rugpull_score),
+    rugpullLevel: String(row.rugpull_level) as DexRugpullLevel,
+    rugpullTrend: String(row.rugpull_trend) as DexRugpullTrend,
+    rugpullFlags: parseJson<DexRugpullFlag[]>(row.rugpull_flags_json as string | null),
+    rugpullDetails: parseJson<DexRugpullDetail[]>(row.rugpull_details_json as string | null),
+    rawPayload: parseJson<Record<string, unknown>>(row.raw_payload_json as string | null),
+    checkedAt: String(row.checked_at)
   };
 }
 
@@ -168,6 +199,8 @@ export class Repository implements PostRepository {
   private readonly insertDexDiscoveryRunStatement;
   private readonly upsertDexTokenCandidateStatement;
   private readonly dexCandidatesPendingRefreshStatement;
+  private readonly dexCandidatesPendingRugCheckStatement;
+  private readonly insertDexRugpullRiskStatement;
   private readonly dexDiscoveriesStatement;
   private readonly dexDiscoveryForPostStatement;
   private readonly latestPollStatement;
@@ -272,6 +305,13 @@ export class Repository implements PostRepository {
         last_checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         priority_score INTEGER NOT NULL DEFAULT 0,
         priority_reasons_json TEXT NOT NULL DEFAULT '[]',
+        rugpull_score INTEGER NOT NULL DEFAULT 0,
+        previous_rugpull_score INTEGER,
+        rugpull_level TEXT NOT NULL DEFAULT 'low',
+        rugpull_flags_json TEXT NOT NULL DEFAULT '[]',
+        rugpull_details_json TEXT NOT NULL DEFAULT '[]',
+        rugpull_trend TEXT NOT NULL DEFAULT 'stable',
+        last_rug_checked_at TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (post_id, chain_id, pair_address)
@@ -279,8 +319,25 @@ export class Repository implements PostRepository {
 
       CREATE INDEX IF NOT EXISTS idx_dex_token_candidates_score
         ON dex_token_candidates(match_score DESC, discovered_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_dex_token_candidates_refresh
-        ON dex_token_candidates(last_checked_at ASC, priority_score DESC);
+
+      CREATE TABLE IF NOT EXISTS dex_rugpull_risk_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_id TEXT NOT NULL,
+        chain_id TEXT NOT NULL,
+        pair_address TEXT NOT NULL,
+        base_token_address TEXT NOT NULL,
+        rugpull_score INTEGER NOT NULL,
+        previous_rugpull_score INTEGER,
+        rugpull_level TEXT NOT NULL,
+        rugpull_trend TEXT NOT NULL,
+        rugpull_flags_json TEXT NOT NULL,
+        rugpull_details_json TEXT NOT NULL,
+        raw_payload_json TEXT NOT NULL,
+        checked_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_dex_rugpull_snapshots_candidate
+        ON dex_rugpull_risk_snapshots(post_id, chain_id, pair_address, checked_at DESC);
     `);
     this.ensureDexTokenCandidateColumns();
 
@@ -519,6 +576,38 @@ export class Repository implements PostRepository {
       LIMIT ?
     `);
 
+    this.dexCandidatesPendingRugCheckStatement = this.db.prepare(`
+      SELECT
+        dex_token_candidates.*,
+        json_extract(meme_signal_analyses.analysis_json, '$.signalScore') AS signal_score,
+        json_extract(meme_signal_analyses.analysis_json, '$.narrative') AS narrative,
+        json_extract(meme_signal_analyses.analysis_json, '$.whySignal') AS why_signal
+      FROM dex_token_candidates
+      LEFT JOIN meme_signal_analyses ON meme_signal_analyses.post_id = dex_token_candidates.post_id
+      WHERE last_rug_checked_at IS NULL
+        OR datetime(last_rug_checked_at) <= datetime(?)
+      ORDER BY rugpull_score DESC, datetime(COALESCE(last_rug_checked_at, discovered_at)) ASC
+      LIMIT ?
+    `);
+
+    this.insertDexRugpullRiskStatement = this.db.prepare(`
+      INSERT INTO dex_rugpull_risk_snapshots (
+        post_id,
+        chain_id,
+        pair_address,
+        base_token_address,
+        rugpull_score,
+        previous_rugpull_score,
+        rugpull_level,
+        rugpull_trend,
+        rugpull_flags_json,
+        rugpull_details_json,
+        raw_payload_json,
+        checked_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      RETURNING *
+    `);
+
     this.dexDiscoveriesStatement = this.db.prepare(`
       SELECT
         dex_token_candidates.*,
@@ -581,7 +670,14 @@ export class Repository implements PostRepository {
       ["previous_volume_24h_usd", "ALTER TABLE dex_token_candidates ADD COLUMN previous_volume_24h_usd REAL"],
       ["last_checked_at", "ALTER TABLE dex_token_candidates ADD COLUMN last_checked_at TEXT"],
       ["priority_score", "ALTER TABLE dex_token_candidates ADD COLUMN priority_score INTEGER NOT NULL DEFAULT 0"],
-      ["priority_reasons_json", "ALTER TABLE dex_token_candidates ADD COLUMN priority_reasons_json TEXT NOT NULL DEFAULT '[]'"]
+      ["priority_reasons_json", "ALTER TABLE dex_token_candidates ADD COLUMN priority_reasons_json TEXT NOT NULL DEFAULT '[]'"],
+      ["rugpull_score", "ALTER TABLE dex_token_candidates ADD COLUMN rugpull_score INTEGER NOT NULL DEFAULT 0"],
+      ["previous_rugpull_score", "ALTER TABLE dex_token_candidates ADD COLUMN previous_rugpull_score INTEGER"],
+      ["rugpull_level", "ALTER TABLE dex_token_candidates ADD COLUMN rugpull_level TEXT NOT NULL DEFAULT 'low'"],
+      ["rugpull_flags_json", "ALTER TABLE dex_token_candidates ADD COLUMN rugpull_flags_json TEXT NOT NULL DEFAULT '[]'"],
+      ["rugpull_details_json", "ALTER TABLE dex_token_candidates ADD COLUMN rugpull_details_json TEXT NOT NULL DEFAULT '[]'"],
+      ["rugpull_trend", "ALTER TABLE dex_token_candidates ADD COLUMN rugpull_trend TEXT NOT NULL DEFAULT 'stable'"],
+      ["last_rug_checked_at", "ALTER TABLE dex_token_candidates ADD COLUMN last_rug_checked_at TEXT"]
     ];
 
     for (const [column, statement] of migrations) {
@@ -604,6 +700,27 @@ export class Repository implements PostRepository {
 
       CREATE INDEX IF NOT EXISTS idx_dex_token_candidates_refresh
         ON dex_token_candidates(last_checked_at ASC, priority_score DESC);
+      CREATE INDEX IF NOT EXISTS idx_dex_token_candidates_rug_check
+        ON dex_token_candidates(last_rug_checked_at ASC, rugpull_score DESC);
+
+      CREATE TABLE IF NOT EXISTS dex_rugpull_risk_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_id TEXT NOT NULL,
+        chain_id TEXT NOT NULL,
+        pair_address TEXT NOT NULL,
+        base_token_address TEXT NOT NULL,
+        rugpull_score INTEGER NOT NULL,
+        previous_rugpull_score INTEGER,
+        rugpull_level TEXT NOT NULL,
+        rugpull_trend TEXT NOT NULL,
+        rugpull_flags_json TEXT NOT NULL,
+        rugpull_details_json TEXT NOT NULL,
+        raw_payload_json TEXT NOT NULL,
+        checked_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_dex_rugpull_snapshots_candidate
+        ON dex_rugpull_risk_snapshots(post_id, chain_id, pair_address, checked_at DESC);
     `);
   }
 
@@ -789,6 +906,72 @@ export class Repository implements PostRepository {
       options.limit
     ) as Record<string, unknown>[];
     return rows.map(rowToDexTokenCandidate);
+  }
+
+  public getDexCandidatesPendingRugCheck(options: {
+    limit: number;
+    ttlMinutes: number;
+  }): DexTokenCandidateRecord[] {
+    const staleBefore = new Date(Date.now() - options.ttlMinutes * 60_000).toISOString();
+    const rows = this.dexCandidatesPendingRugCheckStatement.all(
+      staleBefore,
+      options.limit
+    ) as Record<string, unknown>[];
+    return rows.map(rowToDexTokenCandidate);
+  }
+
+  public saveDexRugpullRisk(input: DexRugpullRiskInput): DexRugpullRiskSnapshotRecord {
+    this.db.exec("BEGIN");
+
+    try {
+      this.db.prepare(`
+        UPDATE dex_token_candidates
+        SET
+          previous_rugpull_score = rugpull_score,
+          rugpull_score = ?,
+          rugpull_level = ?,
+          rugpull_flags_json = ?,
+          rugpull_details_json = ?,
+          rugpull_trend = ?,
+          last_rug_checked_at = ?,
+          updated_at = ?
+        WHERE post_id = ?
+          AND chain_id = ?
+          AND pair_address = ?
+      `).run(
+        input.rugpullScore,
+        input.rugpullLevel,
+        JSON.stringify(input.rugpullFlags),
+        JSON.stringify(input.rugpullDetails),
+        input.rugpullTrend,
+        input.checkedAt,
+        input.checkedAt,
+        input.postId,
+        input.chainId,
+        input.pairAddress
+      );
+
+      const row = this.insertDexRugpullRiskStatement.get(
+        input.postId,
+        input.chainId,
+        input.pairAddress,
+        input.baseTokenAddress,
+        input.rugpullScore,
+        input.previousRugpullScore,
+        input.rugpullLevel,
+        input.rugpullTrend,
+        JSON.stringify(input.rugpullFlags),
+        JSON.stringify(input.rugpullDetails),
+        JSON.stringify(input.rawPayload),
+        input.checkedAt
+      ) as Record<string, unknown>;
+
+      this.db.exec("COMMIT");
+      return rowToDexRugpullRiskSnapshot(row);
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   public getDexDiscoveries(options: { minScore: number; limit: number }): DexTokenCandidateRecord[] {

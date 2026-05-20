@@ -125,6 +125,51 @@ export type DexTokenCandidatePriorityReason =
   | "volume_up_since_discovery"
   | "liquidity_up_since_discovery";
 
+export type DexRugpullLevel = "low" | "medium" | "high" | "critical";
+export type DexRugpullTrend = "improving" | "stable" | "worsening";
+
+export type DexRugpullFlag =
+  | "critical_liquidity"
+  | "low_liquidity"
+  | "liquidity_collapse"
+  | "liquidity_drop"
+  | "extreme_fdv_liquidity"
+  | "high_fdv_liquidity"
+  | "extreme_volume_liquidity"
+  | "high_volume_liquidity"
+  | "price_collapse"
+  | "missing_socials"
+  | "duplicate_symbol"
+  | "very_new_pair"
+  | "new_pair"
+  | "high_fdv_low_liquidity";
+
+export interface DexRugpullDetail {
+  flag: DexRugpullFlag;
+  severity: DexRugpullLevel;
+  points: number;
+  description: string;
+}
+
+export interface DexRugpullRiskInput {
+  postId: string;
+  chainId: string;
+  pairAddress: string;
+  baseTokenAddress: string;
+  rugpullScore: number;
+  previousRugpullScore: number | null;
+  rugpullLevel: DexRugpullLevel;
+  rugpullTrend: DexRugpullTrend;
+  rugpullFlags: DexRugpullFlag[];
+  rugpullDetails: DexRugpullDetail[];
+  rawPayload: Record<string, unknown>;
+  checkedAt: string;
+}
+
+export interface DexRugpullRiskSnapshotRecord extends DexRugpullRiskInput {
+  id: number;
+}
+
 export interface DexDiscoveryRunInput {
   postId: string;
   status: DexDiscoveryStatus;
@@ -165,6 +210,13 @@ export interface DexTokenCandidateInput {
   lastCheckedAt: string;
   priorityScore: number;
   priorityReasons: DexTokenCandidatePriorityReason[];
+  rugpullScore?: number;
+  previousRugpullScore?: number | null;
+  rugpullLevel?: DexRugpullLevel;
+  rugpullFlags?: DexRugpullFlag[];
+  rugpullDetails?: DexRugpullDetail[];
+  rugpullTrend?: DexRugpullTrend;
+  lastRugCheckedAt?: string | null;
 }
 
 export interface DexTokenCandidateRecord extends DexTokenCandidateInput {
@@ -174,6 +226,13 @@ export interface DexTokenCandidateRecord extends DexTokenCandidateInput {
   previousPriceUsd: number | null;
   previousLiquidityUsd: number | null;
   previousVolume24hUsd: number | null;
+  rugpullScore: number;
+  previousRugpullScore: number | null;
+  rugpullLevel: DexRugpullLevel;
+  rugpullFlags: DexRugpullFlag[];
+  rugpullDetails: DexRugpullDetail[];
+  rugpullTrend: DexRugpullTrend;
+  lastRugCheckedAt: string | null;
   createdAt: string;
   updatedAt: string;
   signalScore: number | null;
