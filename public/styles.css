@@ -202,6 +202,13 @@ button:disabled {
   text-decoration: underline;
 }
 
+.link-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
 .post-text {
   margin: 0;
   max-width: 920px;
@@ -357,6 +364,10 @@ select:focus {
   margin: 8px 0 0;
   color: var(--muted);
   line-height: 1.48;
+}
+
+.dex-card h3 {
+  overflow-wrap: anywhere;
 }
 
 .tag-row {

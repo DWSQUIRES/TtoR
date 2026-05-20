@@ -33,6 +33,14 @@ export interface AppConfig {
   openaiTimeoutMs: number;
   aiMaxPostsPerPoll: number;
   memeSignalThreshold: number;
+  dexDiscoveryEnabled: boolean;
+  dexDiscoveryMinSignalScore: number;
+  dexDiscoveryMaxSignalsPerRun: number;
+  dexDiscoveryMaxQueriesPerSignal: number;
+  dexDiscoveryCacheTtlMinutes: number;
+  dexDiscoveryMinLiquidityUsd: number;
+  dexDiscoveryMinVolume24hUsd: number;
+  dexScreenerBaseUrl: string;
 }
 
 function parsePositiveInteger(value: string | undefined, fallback: number): number {
@@ -65,6 +73,19 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
 
 function clampInteger(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function parseNonNegativeNumber(value: string | undefined, fallback: number): number {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+
+  return parsed;
 }
 
 function parseReasoningEffort(value: string | undefined): AppConfig["openaiReasoningEffort"] {
@@ -144,7 +165,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     openaiStoreResponses: !parseBoolean(env.OPENAI_DISABLE_RESPONSE_STORAGE, true),
     openaiTimeoutMs: clampInteger(parsePositiveInteger(env.OPENAI_TIMEOUT_MS, 30_000), 1_000, 55_000),
     aiMaxPostsPerPoll: clampInteger(parsePositiveInteger(env.AI_MAX_POSTS_PER_POLL, 1), 1, 50),
-    memeSignalThreshold: clampInteger(parsePositiveInteger(env.MEME_SIGNAL_THRESHOLD, 70), 0, 100)
+    memeSignalThreshold: clampInteger(parsePositiveInteger(env.MEME_SIGNAL_THRESHOLD, 70), 0, 100),
+    dexDiscoveryEnabled: parseBoolean(env.DEX_DISCOVERY_ENABLED, false),
+    dexDiscoveryMinSignalScore: clampInteger(parsePositiveInteger(env.DEX_DISCOVERY_MIN_SIGNAL_SCORE, 70), 0, 100),
+    dexDiscoveryMaxSignalsPerRun: clampInteger(parsePositiveInteger(env.DEX_DISCOVERY_MAX_SIGNALS_PER_RUN, 5), 1, 50),
+    dexDiscoveryMaxQueriesPerSignal: clampInteger(parsePositiveInteger(env.DEX_DISCOVERY_MAX_QUERIES_PER_SIGNAL, 8), 1, 20),
+    dexDiscoveryCacheTtlMinutes: clampInteger(parsePositiveInteger(env.DEX_DISCOVERY_CACHE_TTL_MINUTES, 30), 1, 1440),
+    dexDiscoveryMinLiquidityUsd: parseNonNegativeNumber(env.DEX_DISCOVERY_MIN_LIQUIDITY_USD, 5000),
+    dexDiscoveryMinVolume24hUsd: parseNonNegativeNumber(env.DEX_DISCOVERY_MIN_VOLUME_24H_USD, 1000),
+    dexScreenerBaseUrl: env.DEXSCREENER_BASE_URL ?? "https://api.dexscreener.com"
   };
 }
 

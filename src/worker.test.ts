@@ -46,7 +46,15 @@ function buildConfig(): AppConfig {
     openaiStoreResponses: false,
     openaiTimeoutMs: 30_000,
     aiMaxPostsPerPoll: 1,
-    memeSignalThreshold: 70
+    memeSignalThreshold: 70,
+    dexDiscoveryEnabled: false,
+    dexDiscoveryMinSignalScore: 70,
+    dexDiscoveryMaxSignalsPerRun: 5,
+    dexDiscoveryMaxQueriesPerSignal: 8,
+    dexDiscoveryCacheTtlMinutes: 30,
+    dexDiscoveryMinLiquidityUsd: 5000,
+    dexDiscoveryMinVolume24hUsd: 1000,
+    dexScreenerBaseUrl: "https://api.dexscreener.com"
   };
 }
 

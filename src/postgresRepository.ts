@@ -3,6 +3,12 @@ import postgres, { type Sql, type TransactionSql } from "postgres";
 import type { AppConfig } from "./config.js";
 import { getRepositoryHealthSnapshot, type PostRepository } from "./repository.js";
 import type {
+  DexDiscoveryRunInput,
+  DexDiscoveryRunRecord,
+  DexDiscoveryStatus,
+  DexTokenCandidateInput,
+  DexTokenCandidateRecord,
+  DexTokenCandidateRiskFlag,
   HealthSnapshot,
   MemeSignalAnalysisInput,
   MemeSignalAnalysisPayload,
@@ -99,6 +105,51 @@ function rowToMemeSignalAnalysis(row: Record<string, unknown>): MemeSignalAnalys
     errorMessage: row.error_message ? String(row.error_message) : null,
     createdAt: toIso(row.created_at),
     ...payload
+  };
+}
+
+function rowToDexDiscoveryRun(row: Record<string, unknown>): DexDiscoveryRunRecord {
+  return {
+    id: Number(row.id),
+    postId: String(row.post_id),
+    status: String(row.status) as DexDiscoveryStatus,
+    startedAt: toIso(row.started_at),
+    finishedAt: toIso(row.finished_at),
+    signalCount: Number(row.signal_count),
+    candidateCount: Number(row.candidate_count),
+    errorCount: Number(row.error_count),
+    errorMessage: row.error_message ? String(row.error_message) : null,
+    metadata: parseJson<Record<string, unknown>>(row.metadata_json, {})
+  };
+}
+
+function rowToDexTokenCandidate(row: Record<string, unknown>): DexTokenCandidateRecord {
+  return {
+    postId: String(row.post_id),
+    chainId: String(row.chain_id),
+    dexId: String(row.dex_id),
+    pairAddress: String(row.pair_address),
+    baseTokenAddress: String(row.base_token_address),
+    baseTokenName: String(row.base_token_name),
+    baseTokenSymbol: String(row.base_token_symbol),
+    quoteTokenSymbol: row.quote_token_symbol ? String(row.quote_token_symbol) : null,
+    url: String(row.url),
+    priceUsd: row.price_usd === null || row.price_usd === undefined ? null : Number(row.price_usd),
+    liquidityUsd: row.liquidity_usd === null || row.liquidity_usd === undefined ? null : Number(row.liquidity_usd),
+    volume24hUsd: row.volume_24h_usd === null || row.volume_24h_usd === undefined ? null : Number(row.volume_24h_usd),
+    marketCap: row.market_cap === null || row.market_cap === undefined ? null : Number(row.market_cap),
+    fdv: row.fdv === null || row.fdv === undefined ? null : Number(row.fdv),
+    pairCreatedAt: row.pair_created_at ? toIso(row.pair_created_at) : null,
+    matchScore: Number(row.match_score),
+    riskFlags: parseJson<DexTokenCandidateRiskFlag[]>(row.risk_flags_json, []),
+    matchedTerms: parseJson<string[]>(row.matched_terms_json, []),
+    rawPayload: parseJson<Record<string, unknown>>(row.raw_payload_json, {}),
+    discoveredAt: toIso(row.discovered_at),
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
+    signalScore: row.signal_score === null || row.signal_score === undefined ? null : Number(row.signal_score),
+    narrative: row.narrative ? String(row.narrative) : null,
+    whySignal: row.why_signal ? String(row.why_signal) : null
   };
 }
 
@@ -317,6 +368,174 @@ export class PostgresRepository implements PostRepository {
     return rows[0] ? rowToMemeSignalAnalysis(rows[0] as Record<string, unknown>) : null;
   }
 
+  public async getSignalsPendingDexDiscovery(options: {
+    minScore: number;
+    limit: number;
+    ttlMinutes: number;
+  }): Promise<MemeSignalAnalysisRecord[]> {
+    await this.ensureInitialized();
+    const rows = await this.sql`
+      SELECT meme_signal_analyses.*
+      FROM meme_signal_analyses
+      LEFT JOIN (
+        SELECT post_id, MAX(finished_at) AS latest_finished_at
+        FROM dex_discovery_runs
+        GROUP BY post_id
+      ) latest_runs ON latest_runs.post_id = meme_signal_analyses.post_id
+      WHERE meme_signal_analyses.status = 'success'
+        AND (analysis_json->>'hasMemecoinSignal')::boolean = TRUE
+        AND (analysis_json->>'signalScore')::integer >= ${options.minScore}
+        AND (
+          latest_runs.latest_finished_at IS NULL
+          OR latest_runs.latest_finished_at <= NOW() - (${options.ttlMinutes}::text || ' minutes')::interval
+        )
+      ORDER BY (analysis_json->>'signalScore')::integer DESC, meme_signal_analyses.created_at DESC
+      LIMIT ${options.limit}
+    `;
+    return rows.map((row) => rowToMemeSignalAnalysis(row as Record<string, unknown>));
+  }
+
+  public async saveDexDiscoveryRun(input: DexDiscoveryRunInput): Promise<DexDiscoveryRunRecord> {
+    await this.ensureInitialized();
+    const rows = await this.sql`
+      INSERT INTO dex_discovery_runs (
+        post_id,
+        status,
+        started_at,
+        finished_at,
+        signal_count,
+        candidate_count,
+        error_count,
+        error_message,
+        metadata_json
+      ) VALUES (
+        ${input.postId},
+        ${input.status},
+        ${input.startedAt},
+        ${input.finishedAt},
+        ${input.signalCount},
+        ${input.candidateCount},
+        ${input.errorCount},
+        ${input.errorMessage ?? null},
+        ${jsonb(this.sql, input.metadata ?? {})}
+      )
+      RETURNING *
+    `;
+    return rowToDexDiscoveryRun(rows[0] as Record<string, unknown>);
+  }
+
+  public async upsertDexTokenCandidates(postId: string, candidates: DexTokenCandidateInput[]): Promise<void> {
+    await this.ensureInitialized();
+    await this.sql.begin(async (transaction) => {
+      await transaction`
+        DELETE FROM dex_token_candidates
+        WHERE post_id = ${postId}
+      `;
+
+      for (const candidate of candidates) {
+        await transaction`
+          INSERT INTO dex_token_candidates (
+            post_id,
+            chain_id,
+            dex_id,
+            pair_address,
+            base_token_address,
+            base_token_name,
+            base_token_symbol,
+            quote_token_symbol,
+            url,
+            price_usd,
+            liquidity_usd,
+            volume_24h_usd,
+            market_cap,
+            fdv,
+            pair_created_at,
+            match_score,
+            risk_flags_json,
+            matched_terms_json,
+            raw_payload_json,
+            discovered_at,
+            updated_at
+          ) VALUES (
+            ${postId},
+            ${candidate.chainId},
+            ${candidate.dexId},
+            ${candidate.pairAddress},
+            ${candidate.baseTokenAddress},
+            ${candidate.baseTokenName},
+            ${candidate.baseTokenSymbol},
+            ${candidate.quoteTokenSymbol},
+            ${candidate.url},
+            ${candidate.priceUsd},
+            ${candidate.liquidityUsd},
+            ${candidate.volume24hUsd},
+            ${candidate.marketCap},
+            ${candidate.fdv},
+            ${candidate.pairCreatedAt ?? null},
+            ${candidate.matchScore},
+            ${jsonb(transaction, candidate.riskFlags)},
+            ${jsonb(transaction, candidate.matchedTerms)},
+            ${jsonb(transaction, candidate.rawPayload)},
+            ${candidate.discoveredAt},
+            ${candidate.discoveredAt}
+          )
+          ON CONFLICT (post_id, chain_id, pair_address) DO UPDATE SET
+            dex_id = EXCLUDED.dex_id,
+            base_token_address = EXCLUDED.base_token_address,
+            base_token_name = EXCLUDED.base_token_name,
+            base_token_symbol = EXCLUDED.base_token_symbol,
+            quote_token_symbol = EXCLUDED.quote_token_symbol,
+            url = EXCLUDED.url,
+            price_usd = EXCLUDED.price_usd,
+            liquidity_usd = EXCLUDED.liquidity_usd,
+            volume_24h_usd = EXCLUDED.volume_24h_usd,
+            market_cap = EXCLUDED.market_cap,
+            fdv = EXCLUDED.fdv,
+            pair_created_at = EXCLUDED.pair_created_at,
+            match_score = EXCLUDED.match_score,
+            risk_flags_json = EXCLUDED.risk_flags_json,
+            matched_terms_json = EXCLUDED.matched_terms_json,
+            raw_payload_json = EXCLUDED.raw_payload_json,
+            discovered_at = EXCLUDED.discovered_at,
+            updated_at = EXCLUDED.updated_at
+        `;
+      }
+    });
+  }
+
+  public async getDexDiscoveries(options: { minScore: number; limit: number }): Promise<DexTokenCandidateRecord[]> {
+    await this.ensureInitialized();
+    const rows = await this.sql`
+      SELECT
+        dex_token_candidates.*,
+        (meme_signal_analyses.analysis_json->>'signalScore')::integer AS signal_score,
+        meme_signal_analyses.analysis_json->>'narrative' AS narrative,
+        meme_signal_analyses.analysis_json->>'whySignal' AS why_signal
+      FROM dex_token_candidates
+      JOIN meme_signal_analyses ON meme_signal_analyses.post_id = dex_token_candidates.post_id
+      WHERE match_score >= ${options.minScore}
+      ORDER BY match_score DESC, COALESCE(liquidity_usd, 0) DESC, discovered_at DESC
+      LIMIT ${options.limit}
+    `;
+    return rows.map((row) => rowToDexTokenCandidate(row as Record<string, unknown>));
+  }
+
+  public async getDexDiscoveryForPost(postId: string): Promise<DexTokenCandidateRecord[]> {
+    await this.ensureInitialized();
+    const rows = await this.sql`
+      SELECT
+        dex_token_candidates.*,
+        (meme_signal_analyses.analysis_json->>'signalScore')::integer AS signal_score,
+        meme_signal_analyses.analysis_json->>'narrative' AS narrative,
+        meme_signal_analyses.analysis_json->>'whySignal' AS why_signal
+      FROM dex_token_candidates
+      LEFT JOIN meme_signal_analyses ON meme_signal_analyses.post_id = dex_token_candidates.post_id
+      WHERE dex_token_candidates.post_id = ${postId}
+      ORDER BY match_score DESC, COALESCE(liquidity_usd, 0) DESC, discovered_at DESC
+    `;
+    return rows.map((row) => rowToDexTokenCandidate(row as Record<string, unknown>));
+  }
+
   public async getLatestPoll(): Promise<PollRunRecord | null> {
     await this.ensureInitialized();
     const rows = await this.sql`
@@ -410,6 +629,55 @@ export class PostgresRepository implements PostRepository {
       ON meme_signal_analyses (((analysis_json->>'signalScore')::integer) DESC)
       WHERE status = 'success'
     `;
+    await this.sql`
+      CREATE TABLE IF NOT EXISTS dex_discovery_runs (
+        id BIGSERIAL PRIMARY KEY,
+        post_id TEXT NOT NULL REFERENCES posts(post_id) ON DELETE CASCADE,
+        status TEXT NOT NULL,
+        started_at TIMESTAMPTZ NOT NULL,
+        finished_at TIMESTAMPTZ NOT NULL,
+        signal_count INTEGER NOT NULL,
+        candidate_count INTEGER NOT NULL,
+        error_count INTEGER NOT NULL,
+        error_message TEXT,
+        metadata_json JSONB NOT NULL
+      )
+    `;
+    await this.sql`
+      CREATE INDEX IF NOT EXISTS idx_dex_discovery_runs_post_finished
+      ON dex_discovery_runs(post_id, finished_at DESC)
+    `;
+    await this.sql`
+      CREATE TABLE IF NOT EXISTS dex_token_candidates (
+        post_id TEXT NOT NULL REFERENCES posts(post_id) ON DELETE CASCADE,
+        chain_id TEXT NOT NULL,
+        dex_id TEXT NOT NULL,
+        pair_address TEXT NOT NULL,
+        base_token_address TEXT NOT NULL,
+        base_token_name TEXT NOT NULL,
+        base_token_symbol TEXT NOT NULL,
+        quote_token_symbol TEXT,
+        url TEXT NOT NULL,
+        price_usd DOUBLE PRECISION,
+        liquidity_usd DOUBLE PRECISION,
+        volume_24h_usd DOUBLE PRECISION,
+        market_cap DOUBLE PRECISION,
+        fdv DOUBLE PRECISION,
+        pair_created_at TIMESTAMPTZ,
+        match_score INTEGER NOT NULL,
+        risk_flags_json JSONB NOT NULL,
+        matched_terms_json JSONB NOT NULL,
+        raw_payload_json JSONB NOT NULL,
+        discovered_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (post_id, chain_id, pair_address)
+      )
+    `;
+    await this.sql`
+      CREATE INDEX IF NOT EXISTS idx_dex_token_candidates_score
+      ON dex_token_candidates(match_score DESC, discovered_at DESC)
+    `;
     await this.normalizeLegacyJsonbRows();
 
     this.initialized = true;
@@ -438,6 +706,26 @@ export class PostgresRepository implements PostRepository {
     `;
     await this.sql`
       UPDATE meme_signal_analyses
+      SET raw_payload_json = (raw_payload_json #>> '{}')::jsonb
+      WHERE jsonb_typeof(raw_payload_json) = 'string'
+    `;
+    await this.sql`
+      UPDATE dex_discovery_runs
+      SET metadata_json = (metadata_json #>> '{}')::jsonb
+      WHERE jsonb_typeof(metadata_json) = 'string'
+    `;
+    await this.sql`
+      UPDATE dex_token_candidates
+      SET risk_flags_json = (risk_flags_json #>> '{}')::jsonb
+      WHERE jsonb_typeof(risk_flags_json) = 'string'
+    `;
+    await this.sql`
+      UPDATE dex_token_candidates
+      SET matched_terms_json = (matched_terms_json #>> '{}')::jsonb
+      WHERE jsonb_typeof(matched_terms_json) = 'string'
+    `;
+    await this.sql`
+      UPDATE dex_token_candidates
       SET raw_payload_json = (raw_payload_json #>> '{}')::jsonb
       WHERE jsonb_typeof(raw_payload_json) = 'string'
     `;

@@ -1,7 +1,13 @@
 import { createVercelReadRuntime } from "../../src/deployment.js";
 import { errorJson, json } from "../../src/http.js";
+import { toCompactPost } from "../../src/postDto.js";
 
-export async function GET(): Promise<Response> {
+function wantsCompactPost(request: Request): boolean {
+  const compact = new URL(request.url).searchParams.get("compact");
+  return compact === "1" || compact === "true";
+}
+
+export async function GET(request: Request): Promise<Response> {
   let runtime: ReturnType<typeof createVercelReadRuntime> | null = null;
 
   try {
@@ -11,7 +17,7 @@ export async function GET(): Promise<Response> {
       return json({ error: "No posts have been ingested yet" }, { status: 404 });
     }
 
-    return json(latestPost);
+    return json(wantsCompactPost(request) ? toCompactPost(latestPost) : latestPost);
   } catch (error) {
     return errorJson(error);
   } finally {

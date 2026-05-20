@@ -11,6 +11,8 @@ const elements = {
   signalCount: document.querySelector("#signalCount"),
   signalThresholdLabel: document.querySelector("#signalThresholdLabel"),
   analysisCount: document.querySelector("#analysisCount"),
+  dexCount: document.querySelector("#dexCount"),
+  dexStateLabel: document.querySelector("#dexStateLabel"),
   lastUpdated: document.querySelector("#lastUpdated"),
   latestPostLink: document.querySelector("#latestPostLink"),
   latestPostText: document.querySelector("#latestPostText"),
@@ -18,8 +20,10 @@ const elements = {
   latestDetectedAt: document.querySelector("#latestDetectedAt"),
   latestAnalysis: document.querySelector("#latestAnalysis"),
   signalsState: document.querySelector("#signalsState"),
+  dexState: document.querySelector("#dexState"),
   analysesState: document.querySelector("#analysesState"),
   signalsList: document.querySelector("#signalsList"),
+  dexList: document.querySelector("#dexList"),
   analysesList: document.querySelector("#analysesList")
 };
 
@@ -35,6 +39,10 @@ function api(path) {
     }
     return body;
   });
+}
+
+function optionalApi(path, fallback) {
+  return api(path).catch(() => fallback);
 }
 
 function formatTime(value) {
@@ -120,6 +128,155 @@ function renderNames(names) {
     .join("");
 }
 
+function formatUsd(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return "n/a";
+  }
+
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "USD",
+    notation: number >= 1_000_000 ? "compact" : "standard",
+    maximumFractionDigits: number >= 1000 ? 0 : 2
+  }).format(number);
+}
+
+function renderRiskFlags(flags) {
+  if (!Array.isArray(flags) || flags.length === 0) {
+    return '<span class="tag action">passed filters</span>';
+  }
+
+  return flags
+    .slice(0, 5)
+    .map((flag) => `<span class="tag ${String(flag).includes("low") ? "error" : ""}">${escapeHtml(String(flag).replaceAll("_", " "))}</span>`)
+    .join("");
+}
+
+function normalizeTerm(value) {
+  return String(value ?? "")
+    .replaceAll("$", "")
+    .replace(/[^\p{L}\p{N}\s-]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function dexPairKey(pair) {
+  return `${pair.chainId ?? "unknown"}:${pair.pairAddress ?? pair.url ?? ""}`;
+}
+
+function pairMatchesTerm(pair, term) {
+  const normalized = normalizeTerm(term);
+  const name = normalizeTerm(pair.baseToken?.name);
+  const symbol = normalizeTerm(pair.baseToken?.symbol);
+  return Boolean(normalized && (name.includes(normalized) || normalized.includes(name) || symbol === normalized));
+}
+
+function buildDexFallbackQueries(signals) {
+  const queries = [];
+  const seen = new Set();
+
+  for (const signal of signals.slice(0, 4)) {
+    const terms = [
+      ...(signal.searchTerms ?? []),
+      ...(signal.possibleNames ?? []).flatMap((name) => [name.ticker, name.name]),
+      ...(signal.entities ?? [])
+    ];
+
+    for (const term of terms) {
+      const normalized = normalizeTerm(term);
+      if (normalized.length < 2 || seen.has(normalized)) {
+        continue;
+      }
+
+      seen.add(normalized);
+      queries.push({
+        postId: signal.postId,
+        narrative: signal.narrative,
+        whySignal: signal.whySignal,
+        query: normalized
+      });
+      if (queries.length >= 8) {
+        return queries;
+      }
+    }
+  }
+
+  return queries;
+}
+
+function pairToDexCandidate(pair, source, query) {
+  const liquidityUsd = Number(pair.liquidity?.usd ?? 0);
+  const volume24hUsd = Number(pair.volume?.h24 ?? 0);
+  const hasMatch = pairMatchesTerm(pair, query);
+  const marketComponent = Math.min(35, Math.log10(Math.max(1, liquidityUsd + volume24hUsd)) * 7);
+  const matchScore = Math.max(1, Math.min(100, Math.round((hasMatch ? 55 : 25) + marketComponent)));
+  const riskFlags = [];
+
+  if (liquidityUsd > 0 && liquidityUsd < 5000) {
+    riskFlags.push("low_liquidity");
+  }
+  if (volume24hUsd > 0 && volume24hUsd < 1000) {
+    riskFlags.push("low_volume");
+  }
+  if (!pair.info?.websites?.length && !pair.info?.socials?.length) {
+    riskFlags.push("missing_socials");
+  }
+
+  return {
+    postId: source.postId,
+    chainId: pair.chainId ?? "unknown",
+    dexId: pair.dexId ?? "unknown",
+    pairAddress: pair.pairAddress ?? "",
+    baseTokenAddress: pair.baseToken?.address ?? "",
+    baseTokenName: pair.baseToken?.name ?? "Unknown token",
+    baseTokenSymbol: pair.baseToken?.symbol ?? "",
+    quoteTokenSymbol: pair.quoteToken?.symbol ?? null,
+    url: pair.url ?? "#",
+    priceUsd: Number(pair.priceUsd ?? 0),
+    liquidityUsd,
+    volume24hUsd,
+    marketCap: Number(pair.marketCap ?? 0),
+    fdv: Number(pair.fdv ?? 0),
+    matchScore,
+    riskFlags,
+    matchedTerms: [query],
+    narrative: source.narrative,
+    whySignal: source.whySignal
+  };
+}
+
+async function discoverDexFromSignals(signals) {
+  const queries = buildDexFallbackQueries(signals);
+  const candidates = new Map();
+
+  for (const source of queries) {
+    const url = `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(source.query)}`;
+    const response = await fetch(url, { cache: "no-store" }).catch(() => null);
+    if (!response?.ok) {
+      continue;
+    }
+
+    const payload = await response.json().catch(() => null);
+    for (const pair of payload?.pairs ?? []) {
+      if (!pair.chainId || !pair.pairAddress || !pair.url) {
+        continue;
+      }
+
+      const candidate = pairToDexCandidate(pair, source, source.query);
+      const existing = candidates.get(dexPairKey(pair));
+      if (!existing || candidate.matchScore > existing.matchScore) {
+        candidates.set(dexPairKey(pair), candidate);
+      }
+    }
+  }
+
+  return [...candidates.values()]
+    .sort((left, right) => right.matchScore - left.matchScore || (right.liquidityUsd ?? 0) - (left.liquidityUsd ?? 0))
+    .slice(0, 20);
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -194,6 +351,53 @@ function renderSignals(signals) {
   );
 }
 
+function renderDexDiscoveries(candidates) {
+  elements.dexCount.textContent = String(candidates.length);
+  elements.dexStateLabel.textContent = candidates.length ? "Stored token matches" : "No stored token matches";
+
+  if (candidates.length === 0) {
+    setState(elements.dexState, "Empty");
+    renderEmpty(elements.dexList, "No DEX token matches yet");
+    return;
+  }
+
+  setState(elements.dexState, `${candidates.length} rows`, "good");
+  elements.dexList.replaceChildren(
+    ...candidates.map((candidate) => {
+      const card = document.createElement("article");
+      card.className = "signal-card dex-card";
+      const symbol = candidate.baseTokenSymbol ? `$${candidate.baseTokenSymbol}` : "";
+      const title = `${candidate.baseTokenName ?? "Unknown token"} ${symbol}`.trim();
+      const matched = Array.isArray(candidate.matchedTerms) && candidate.matchedTerms[0]
+        ? `<span class="tag">matched ${escapeHtml(candidate.matchedTerms[0])}</span>`
+        : "";
+      card.innerHTML = `
+        <div class="${scoreClass(candidate.matchScore)}">${escapeHtml(candidate.matchScore)}</div>
+        <div>
+          <div class="row-heading">
+            <h3>${escapeHtml(title)}</h3>
+            <div class="link-row">
+              <a class="text-link" href="${escapeHtml(candidate.url)}" target="_blank" rel="noreferrer">DexScreener</a>
+              <a class="text-link" href="${xPostUrl(candidate.postId)}" target="_blank" rel="noreferrer">Open on X</a>
+            </div>
+          </div>
+          <p>${escapeHtml(candidate.narrative || candidate.whySignal || "Matched from a stored narrative signal.")}</p>
+          <div class="tag-row">
+            <span class="tag action">${escapeHtml(candidate.chainId)}</span>
+            <span class="tag">${escapeHtml(candidate.dexId)}</span>
+            <span class="tag">liq ${escapeHtml(formatUsd(candidate.liquidityUsd))}</span>
+            <span class="tag">24h ${escapeHtml(formatUsd(candidate.volume24hUsd))}</span>
+            <span class="tag">fdv ${escapeHtml(formatUsd(candidate.fdv))}</span>
+            ${matched}
+            ${renderRiskFlags(candidate.riskFlags)}
+          </div>
+        </div>
+      `;
+      return card;
+    })
+  );
+}
+
 function renderAnalyses(analyses) {
   elements.analysisCount.textContent = String(analyses.length);
 
@@ -242,6 +446,7 @@ async function refresh() {
   refreshButton.disabled = true;
   refreshButton.textContent = "Refreshing";
   setState(elements.signalsState, "Loading");
+  setState(elements.dexState, "Loading");
   setState(elements.analysesState, "Loading");
 
   try {
@@ -255,6 +460,7 @@ async function refresh() {
       api(`/api/meme-signals?min_score=${minScore}&limit=20`),
       api(`/api/meme-analyses?limit=25${status}`)
     ]);
+    const dexDiscoveries = await discoverDexFromSignals(signals);
 
     let latestAnalysis = null;
     if (latestPost?.postId) {
@@ -264,12 +470,15 @@ async function refresh() {
     renderHealth(health);
     renderLatestPost(latestPost, latestAnalysis);
     renderSignals(signals);
+    renderDexDiscoveries(dexDiscoveries);
     renderAnalyses(analyses);
     elements.lastUpdated.textContent = `Updated ${formatRelative(new Date().toISOString())}`;
   } catch (error) {
     setState(elements.signalsState, "Error", "bad");
+    setState(elements.dexState, "Error", "bad");
     setState(elements.analysesState, "Error", "bad");
     renderEmpty(elements.signalsList, error.message);
+    renderEmpty(elements.dexList, error.message);
     renderEmpty(elements.analysesList, error.message);
   } finally {
     isRefreshing = false;

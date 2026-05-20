@@ -2,6 +2,10 @@ import { computeHealthStatus } from "./health.js";
 import type { AppConfig } from "./config.js";
 import type {
   HealthSnapshot,
+  DexDiscoveryRunInput,
+  DexDiscoveryRunRecord,
+  DexTokenCandidateInput,
+  DexTokenCandidateRecord,
   MemeSignalAnalysisInput,
   MemeSignalAnalysisRecord,
   PollRunInput,
@@ -22,6 +26,15 @@ export interface PostRepository {
   getMemeAnalyses(options: { status: MemeSignalStatus | null; limit: number }): Awaitable<MemeSignalAnalysisRecord[]>;
   getMemeSignals(options: { minScore: number; limit: number }): Awaitable<MemeSignalAnalysisRecord[]>;
   getMemeSignalForPost(postId: string): Awaitable<MemeSignalAnalysisRecord | null>;
+  getSignalsPendingDexDiscovery(options: {
+    minScore: number;
+    limit: number;
+    ttlMinutes: number;
+  }): Awaitable<MemeSignalAnalysisRecord[]>;
+  saveDexDiscoveryRun(input: DexDiscoveryRunInput): Awaitable<DexDiscoveryRunRecord>;
+  upsertDexTokenCandidates(postId: string, candidates: DexTokenCandidateInput[]): Awaitable<void>;
+  getDexDiscoveries(options: { minScore: number; limit: number }): Awaitable<DexTokenCandidateRecord[]>;
+  getDexDiscoveryForPost(postId: string): Awaitable<DexTokenCandidateRecord[]>;
   getLatestPoll(): Awaitable<PollRunRecord | null>;
   getLatestSuccessfulPoll(): Awaitable<PollRunRecord | null>;
   getHealthSnapshot(config: Pick<AppConfig, "targetHandle">, now?: Date): Awaitable<HealthSnapshot>;

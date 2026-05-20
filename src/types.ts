@@ -104,6 +104,63 @@ export interface MemeSignalAnalysisInput {
   createdAt: string;
 }
 
+export type DexDiscoveryStatus = "success" | "error";
+
+export type DexTokenCandidateRiskFlag =
+  | "low_liquidity"
+  | "low_volume"
+  | "new_pair"
+  | "missing_socials"
+  | "duplicate_symbol"
+  | "high_fdv_low_liquidity";
+
+export interface DexDiscoveryRunInput {
+  postId: string;
+  status: DexDiscoveryStatus;
+  startedAt: string;
+  finishedAt: string;
+  signalCount: number;
+  candidateCount: number;
+  errorCount: number;
+  errorMessage?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface DexDiscoveryRunRecord extends DexDiscoveryRunInput {
+  id: number;
+}
+
+export interface DexTokenCandidateInput {
+  postId: string;
+  chainId: string;
+  dexId: string;
+  pairAddress: string;
+  baseTokenAddress: string;
+  baseTokenName: string;
+  baseTokenSymbol: string;
+  quoteTokenSymbol: string | null;
+  url: string;
+  priceUsd: number | null;
+  liquidityUsd: number | null;
+  volume24hUsd: number | null;
+  marketCap: number | null;
+  fdv: number | null;
+  pairCreatedAt: string | null;
+  matchScore: number;
+  riskFlags: DexTokenCandidateRiskFlag[];
+  matchedTerms: string[];
+  rawPayload: Record<string, unknown>;
+  discoveredAt: string;
+}
+
+export interface DexTokenCandidateRecord extends DexTokenCandidateInput {
+  createdAt: string;
+  updatedAt: string;
+  signalScore: number | null;
+  narrative: string | null;
+  whySignal: string | null;
+}
+
 export interface HealthSnapshot {
   status: HealthStatus;
   targetHandle: string;

@@ -1,6 +1,8 @@
 import { loadConfig, type AppConfig } from "./config.js";
 import { MemeSignalService } from "./ai/memeSignalService.js";
 import { OpenAIMemeSignalAnalyzer } from "./ai/memeSignalAnalyzer.js";
+import { DexDiscoveryService } from "./dex/discoveryService.js";
+import { HttpDexScreenerClient } from "./dex/dexScreenerClient.js";
 import { createLogger } from "./logger.js";
 import { PostgresRepository } from "./postgresRepository.js";
 import type { PostRepository } from "./repository.js";
@@ -67,6 +69,23 @@ export function createMemeSignalService(
   );
 }
 
+export function createDexDiscoveryService(
+  config: AppConfig,
+  repository: PostRepository,
+  logger = createLogger(config.logLevel)
+): DexDiscoveryService | null {
+  if (!config.dexDiscoveryEnabled) {
+    return null;
+  }
+
+  return new DexDiscoveryService(
+    config,
+    repository,
+    new HttpDexScreenerClient(config.dexScreenerBaseUrl),
+    logger
+  );
+}
+
 export function createVercelRuntime(env: NodeJS.ProcessEnv = process.env): {
   config: AppConfig;
   repository: PostRepository;
@@ -94,6 +113,22 @@ export function createVercelRuntime(env: NodeJS.ProcessEnv = process.env): {
       logger
     ),
     memeSignalService: createMemeSignalService(config, repository, logger)
+  };
+}
+
+export function createVercelDexDiscoveryRuntime(env: NodeJS.ProcessEnv = process.env): {
+  config: AppConfig;
+  repository: PostRepository;
+  dexDiscoveryService: DexDiscoveryService | null;
+} {
+  const config = loadVercelConfig(env);
+  const logger = createLogger(config.logLevel);
+  const repository = PostgresRepository.fromEnv(env);
+
+  return {
+    config,
+    repository,
+    dexDiscoveryService: createDexDiscoveryService(config, repository, logger)
   };
 }
 

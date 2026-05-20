@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { Repository } from "./storage.js";
-import type { MemeSignalAnalysisPayload, NormalizedPost } from "./types.js";
+import type { DexTokenCandidateInput, MemeSignalAnalysisPayload, NormalizedPost } from "./types.js";
 
 function createPost(postId: string, detectedAt: string): NormalizedPost {
   return {
@@ -142,6 +142,103 @@ describe("Repository", () => {
       }
     ]);
     expect(repository.getMemeSignalForPost("signal-post")?.recommendedAction).toBe("urgent_search");
+
+    repository.close();
+  });
+
+  it("stores and queries DEX discovery candidates", () => {
+    const repository = Repository.open(":memory:");
+    const post = createPost("signal-post", "2026-05-15T10:00:00.000Z");
+    const analysis: MemeSignalAnalysisPayload = {
+      hasMemecoinSignal: true,
+      signalScore: 88,
+      confidence: "high",
+      narrative: "Concrete skull recovered",
+      whySignal: "Short bizarre visual phrase.",
+      searchTerms: ["concrete skull", "skull"],
+      possibleNames: [
+        {
+          name: "Concrete Skull",
+          ticker: "SKULL",
+          priority: 95,
+          reason: "Direct phrase match."
+        }
+      ],
+      entities: [],
+      urgency: "high",
+      sensitivityFlags: [],
+      recommendedAction: "urgent_search"
+    };
+    const candidate: DexTokenCandidateInput = {
+      postId: post.postId,
+      chainId: "solana",
+      dexId: "raydium",
+      pairAddress: "pair-1",
+      baseTokenAddress: "token-1",
+      baseTokenName: "Concrete Skull",
+      baseTokenSymbol: "SKULL",
+      quoteTokenSymbol: "SOL",
+      url: "https://dexscreener.com/solana/pair-1",
+      priceUsd: 0.001,
+      liquidityUsd: 50_000,
+      volume24hUsd: 100_000,
+      marketCap: 1_000_000,
+      fdv: 1_200_000,
+      pairCreatedAt: "2026-05-15T09:00:00.000Z",
+      matchScore: 91,
+      riskFlags: ["new_pair"],
+      matchedTerms: ["concrete skull", "skull"],
+      rawPayload: {
+        pairAddress: "pair-1"
+      },
+      discoveredAt: "2026-05-15T10:00:10.000Z"
+    };
+
+    repository.recordPollRun({
+      startedAt: "2026-05-15T10:00:00.000Z",
+      finishedAt: "2026-05-15T10:00:05.000Z",
+      status: "success",
+      posts: [post]
+    });
+    repository.saveMemeSignalAnalysis({
+      postId: post.postId,
+      status: "success",
+      model: "test-model",
+      promptVersion: "test-prompt",
+      analysis,
+      createdAt: "2026-05-15T10:00:06.000Z"
+    });
+
+    expect(repository.getSignalsPendingDexDiscovery({ minScore: 70, limit: 10, ttlMinutes: 30 })).toMatchObject([
+      {
+        postId: "signal-post"
+      }
+    ]);
+    repository.upsertDexTokenCandidates(post.postId, [candidate]);
+    repository.saveDexDiscoveryRun({
+      postId: post.postId,
+      status: "success",
+      startedAt: "2026-05-15T10:00:10.000Z",
+      finishedAt: "2026-05-15T10:00:11.000Z",
+      signalCount: 1,
+      candidateCount: 1,
+      errorCount: 0,
+      metadata: {
+        queryTerms: ["concrete skull"]
+      }
+    });
+
+    expect(repository.getDexDiscoveries({ minScore: 70, limit: 10 })).toMatchObject([
+      {
+        postId: "signal-post",
+        baseTokenSymbol: "SKULL",
+        matchScore: 91,
+        signalScore: 88,
+        narrative: "Concrete skull recovered"
+      }
+    ]);
+    expect(repository.getDexDiscoveryForPost("signal-post")).toHaveLength(1);
+    expect(repository.getSignalsPendingDexDiscovery({ minScore: 70, limit: 10, ttlMinutes: 1_000_000 })).toHaveLength(0);
 
     repository.close();
   });

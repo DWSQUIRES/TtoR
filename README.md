@@ -77,7 +77,9 @@ npm run api
 - `GET /posts?since_created_at=<ISO timestamp>`
 - `GET /meme-analyses?status=success&limit=50`
 - `GET /meme-signals?min_score=70&limit=50`
+- `GET /dex-discoveries?min_score=0&limit=50`
 - `GET /posts/<post_id>/meme-analysis`
+- `GET /posts/<post_id>/dex-discovery`
 
 On Vercel, the same endpoints are under `/api`:
 
@@ -87,8 +89,11 @@ On Vercel, the same endpoints are under `/api`:
 - `GET /api/posts?since_created_at=<ISO timestamp>`
 - `GET /api/meme-analyses?status=success&limit=50`
 - `GET /api/meme-signals?min_score=70&limit=50`
+- `GET /api/dex-discoveries?min_score=0&limit=50`
 - `GET /api/posts/<post_id>/meme-analysis`
+- `GET /api/posts/<post_id>/dex-discovery`
 - `GET /api/cron/poll`
+- `GET /api/cron/dex-discovery`
 
 ## AI memecoin signal analysis
 
@@ -109,6 +114,31 @@ MEME_SIGNAL_THRESHOLD=70
 ```
 
 When enabled, each successful poll analyzes up to `AI_MAX_POSTS_PER_POLL` posts that do not yet have a meme signal analysis. AI failures are stored on the relevant post and do not fail the scraping poll. The recommended cron-safe profile is `gpt-5.4` with `medium` reasoning and one post per poll.
+
+## DEX discovery layer
+
+The optional DEX discovery layer runs independently from X polling and Telegram trading. It consumes stored high-score meme signals, searches DexScreener for existing token pairs, stores ranked matches, and exposes them through the API/dashboard. It does not quote or execute trades.
+
+Enable it with:
+
+```bash
+DEX_DISCOVERY_ENABLED=true
+DEX_DISCOVERY_MIN_SIGNAL_SCORE=70
+DEX_DISCOVERY_MAX_SIGNALS_PER_RUN=5
+DEX_DISCOVERY_MAX_QUERIES_PER_SIGNAL=8
+DEX_DISCOVERY_CACHE_TTL_MINUTES=30
+DEX_DISCOVERY_MIN_LIQUIDITY_USD=5000
+DEX_DISCOVERY_MIN_VOLUME_24H_USD=1000
+DEXSCREENER_BASE_URL=https://api.dexscreener.com
+```
+
+Run locally:
+
+```bash
+npm run dex-discovery
+```
+
+On Vercel, call `/api/cron/dex-discovery` with the same `Authorization: Bearer <CRON_SECRET>` header used by the poll cron.
 
 ## Vercel Deployment
 

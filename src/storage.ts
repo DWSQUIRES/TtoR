@@ -5,6 +5,12 @@ import type {
 } from "./config.js";
 import { getRepositoryHealthSnapshot, type PostRepository } from "./repository.js";
 import type {
+  DexDiscoveryRunInput,
+  DexDiscoveryRunRecord,
+  DexDiscoveryStatus,
+  DexTokenCandidateInput,
+  DexTokenCandidateRecord,
+  DexTokenCandidateRiskFlag,
   HealthSnapshot,
   MemeSignalAnalysisInput,
   MemeSignalAnalysisRecord,
@@ -91,6 +97,51 @@ function rowToMemeSignalAnalysis(row: Record<string, unknown>): MemeSignalAnalys
   };
 }
 
+function rowToDexDiscoveryRun(row: Record<string, unknown>): DexDiscoveryRunRecord {
+  return {
+    id: Number(row.id),
+    postId: String(row.post_id),
+    status: String(row.status) as DexDiscoveryStatus,
+    startedAt: String(row.started_at),
+    finishedAt: String(row.finished_at),
+    signalCount: Number(row.signal_count),
+    candidateCount: Number(row.candidate_count),
+    errorCount: Number(row.error_count),
+    errorMessage: row.error_message ? String(row.error_message) : null,
+    metadata: parseJson<Record<string, unknown>>(row.metadata_json as string | null)
+  };
+}
+
+function rowToDexTokenCandidate(row: Record<string, unknown>): DexTokenCandidateRecord {
+  return {
+    postId: String(row.post_id),
+    chainId: String(row.chain_id),
+    dexId: String(row.dex_id),
+    pairAddress: String(row.pair_address),
+    baseTokenAddress: String(row.base_token_address),
+    baseTokenName: String(row.base_token_name),
+    baseTokenSymbol: String(row.base_token_symbol),
+    quoteTokenSymbol: row.quote_token_symbol ? String(row.quote_token_symbol) : null,
+    url: String(row.url),
+    priceUsd: row.price_usd === null || row.price_usd === undefined ? null : Number(row.price_usd),
+    liquidityUsd: row.liquidity_usd === null || row.liquidity_usd === undefined ? null : Number(row.liquidity_usd),
+    volume24hUsd: row.volume_24h_usd === null || row.volume_24h_usd === undefined ? null : Number(row.volume_24h_usd),
+    marketCap: row.market_cap === null || row.market_cap === undefined ? null : Number(row.market_cap),
+    fdv: row.fdv === null || row.fdv === undefined ? null : Number(row.fdv),
+    pairCreatedAt: row.pair_created_at ? String(row.pair_created_at) : null,
+    matchScore: Number(row.match_score),
+    riskFlags: parseJson<DexTokenCandidateRiskFlag[]>(row.risk_flags_json as string | null),
+    matchedTerms: parseJson<string[]>(row.matched_terms_json as string | null),
+    rawPayload: parseJson<Record<string, unknown>>(row.raw_payload_json as string | null),
+    discoveredAt: String(row.discovered_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    signalScore: row.signal_score === null || row.signal_score === undefined ? null : Number(row.signal_score),
+    narrative: row.narrative ? String(row.narrative) : null,
+    whySignal: row.why_signal ? String(row.why_signal) : null
+  };
+}
+
 export class Repository implements PostRepository {
   private readonly insertPostStatement;
   private readonly insertPollRunStatement;
@@ -103,6 +154,12 @@ export class Repository implements PostRepository {
   private readonly memeAnalysesByStatusStatement;
   private readonly memeSignalsStatement;
   private readonly memeSignalForPostStatement;
+  private readonly signalsPendingDexDiscoveryStatement;
+  private readonly insertDexDiscoveryRunStatement;
+  private readonly deleteDexTokenCandidatesForPostStatement;
+  private readonly upsertDexTokenCandidateStatement;
+  private readonly dexDiscoveriesStatement;
+  private readonly dexDiscoveryForPostStatement;
   private readonly latestPollStatement;
   private readonly latestSuccessfulPollStatement;
 
@@ -158,6 +215,51 @@ export class Repository implements PostRepository {
 
       CREATE INDEX IF NOT EXISTS idx_meme_signal_analyses_score
         ON meme_signal_analyses(json_extract(analysis_json, '$.signalScore') DESC);
+
+      CREATE TABLE IF NOT EXISTS dex_discovery_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT NOT NULL,
+        signal_count INTEGER NOT NULL,
+        candidate_count INTEGER NOT NULL,
+        error_count INTEGER NOT NULL,
+        error_message TEXT,
+        metadata_json TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_dex_discovery_runs_post_finished
+        ON dex_discovery_runs(post_id, finished_at DESC);
+
+      CREATE TABLE IF NOT EXISTS dex_token_candidates (
+        post_id TEXT NOT NULL,
+        chain_id TEXT NOT NULL,
+        dex_id TEXT NOT NULL,
+        pair_address TEXT NOT NULL,
+        base_token_address TEXT NOT NULL,
+        base_token_name TEXT NOT NULL,
+        base_token_symbol TEXT NOT NULL,
+        quote_token_symbol TEXT,
+        url TEXT NOT NULL,
+        price_usd REAL,
+        liquidity_usd REAL,
+        volume_24h_usd REAL,
+        market_cap REAL,
+        fdv REAL,
+        pair_created_at TEXT,
+        match_score INTEGER NOT NULL,
+        risk_flags_json TEXT NOT NULL,
+        matched_terms_json TEXT NOT NULL,
+        raw_payload_json TEXT NOT NULL,
+        discovered_at TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (post_id, chain_id, pair_address)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_dex_token_candidates_score
+        ON dex_token_candidates(match_score DESC, discovered_at DESC);
     `);
 
     this.insertPostStatement = this.db.prepare(`
@@ -288,6 +390,116 @@ export class Repository implements PostRepository {
       LIMIT 1
     `);
 
+    this.signalsPendingDexDiscoveryStatement = this.db.prepare(`
+      SELECT meme_signal_analyses.*
+      FROM meme_signal_analyses
+      LEFT JOIN (
+        SELECT post_id, MAX(finished_at) AS latest_finished_at
+        FROM dex_discovery_runs
+        GROUP BY post_id
+      ) latest_runs ON latest_runs.post_id = meme_signal_analyses.post_id
+      WHERE meme_signal_analyses.status = 'success'
+        AND json_extract(analysis_json, '$.hasMemecoinSignal') = 1
+        AND json_extract(analysis_json, '$.signalScore') >= ?
+        AND (
+          latest_runs.latest_finished_at IS NULL
+          OR datetime(latest_runs.latest_finished_at) <= datetime(?)
+        )
+      ORDER BY json_extract(analysis_json, '$.signalScore') DESC, meme_signal_analyses.created_at DESC
+      LIMIT ?
+    `);
+
+    this.insertDexDiscoveryRunStatement = this.db.prepare(`
+      INSERT INTO dex_discovery_runs (
+        post_id,
+        status,
+        started_at,
+        finished_at,
+        signal_count,
+        candidate_count,
+        error_count,
+        error_message,
+        metadata_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      RETURNING *
+    `);
+
+    this.deleteDexTokenCandidatesForPostStatement = this.db.prepare(`
+      DELETE FROM dex_token_candidates
+      WHERE post_id = ?
+    `);
+
+    this.upsertDexTokenCandidateStatement = this.db.prepare(`
+      INSERT INTO dex_token_candidates (
+        post_id,
+        chain_id,
+        dex_id,
+        pair_address,
+        base_token_address,
+        base_token_name,
+        base_token_symbol,
+        quote_token_symbol,
+        url,
+        price_usd,
+        liquidity_usd,
+        volume_24h_usd,
+        market_cap,
+        fdv,
+        pair_created_at,
+        match_score,
+        risk_flags_json,
+        matched_terms_json,
+        raw_payload_json,
+        discovered_at,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(post_id, chain_id, pair_address) DO UPDATE SET
+        dex_id = excluded.dex_id,
+        base_token_address = excluded.base_token_address,
+        base_token_name = excluded.base_token_name,
+        base_token_symbol = excluded.base_token_symbol,
+        quote_token_symbol = excluded.quote_token_symbol,
+        url = excluded.url,
+        price_usd = excluded.price_usd,
+        liquidity_usd = excluded.liquidity_usd,
+        volume_24h_usd = excluded.volume_24h_usd,
+        market_cap = excluded.market_cap,
+        fdv = excluded.fdv,
+        pair_created_at = excluded.pair_created_at,
+        match_score = excluded.match_score,
+        risk_flags_json = excluded.risk_flags_json,
+        matched_terms_json = excluded.matched_terms_json,
+        raw_payload_json = excluded.raw_payload_json,
+        discovered_at = excluded.discovered_at,
+        updated_at = excluded.updated_at
+    `);
+
+    this.dexDiscoveriesStatement = this.db.prepare(`
+      SELECT
+        dex_token_candidates.*,
+        json_extract(meme_signal_analyses.analysis_json, '$.signalScore') AS signal_score,
+        json_extract(meme_signal_analyses.analysis_json, '$.narrative') AS narrative,
+        json_extract(meme_signal_analyses.analysis_json, '$.whySignal') AS why_signal
+      FROM dex_token_candidates
+      JOIN meme_signal_analyses ON meme_signal_analyses.post_id = dex_token_candidates.post_id
+      WHERE match_score >= ?
+      ORDER BY match_score DESC, COALESCE(liquidity_usd, 0) DESC, discovered_at DESC
+      LIMIT ?
+    `);
+
+    this.dexDiscoveryForPostStatement = this.db.prepare(`
+      SELECT
+        dex_token_candidates.*,
+        json_extract(meme_signal_analyses.analysis_json, '$.signalScore') AS signal_score,
+        json_extract(meme_signal_analyses.analysis_json, '$.narrative') AS narrative,
+        json_extract(meme_signal_analyses.analysis_json, '$.whySignal') AS why_signal
+      FROM dex_token_candidates
+      LEFT JOIN meme_signal_analyses ON meme_signal_analyses.post_id = dex_token_candidates.post_id
+      WHERE dex_token_candidates.post_id = ?
+      ORDER BY match_score DESC, COALESCE(liquidity_usd, 0) DESC, discovered_at DESC
+    `);
+
     this.latestPollStatement = this.db.prepare(`
       SELECT *
       FROM poll_runs
@@ -408,6 +620,83 @@ export class Repository implements PostRepository {
   public getMemeSignalForPost(postId: string): MemeSignalAnalysisRecord | null {
     const row = this.memeSignalForPostStatement.get(postId) as Record<string, unknown> | undefined;
     return row ? rowToMemeSignalAnalysis(row) : null;
+  }
+
+  public getSignalsPendingDexDiscovery(options: {
+    minScore: number;
+    limit: number;
+    ttlMinutes: number;
+  }): MemeSignalAnalysisRecord[] {
+    const staleBefore = new Date(Date.now() - options.ttlMinutes * 60_000).toISOString();
+    const rows = this.signalsPendingDexDiscoveryStatement.all(
+      options.minScore,
+      staleBefore,
+      options.limit
+    ) as Record<string, unknown>[];
+    return rows.map(rowToMemeSignalAnalysis);
+  }
+
+  public saveDexDiscoveryRun(input: DexDiscoveryRunInput): DexDiscoveryRunRecord {
+    const row = this.insertDexDiscoveryRunStatement.get(
+      input.postId,
+      input.status,
+      input.startedAt,
+      input.finishedAt,
+      input.signalCount,
+      input.candidateCount,
+      input.errorCount,
+      input.errorMessage ?? null,
+      JSON.stringify(input.metadata ?? {})
+    ) as Record<string, unknown>;
+    return rowToDexDiscoveryRun(row);
+  }
+
+  public upsertDexTokenCandidates(postId: string, candidates: DexTokenCandidateInput[]): void {
+    this.db.exec("BEGIN");
+
+    try {
+      this.deleteDexTokenCandidatesForPostStatement.run(postId);
+      for (const candidate of candidates) {
+        this.upsertDexTokenCandidateStatement.run(
+          postId,
+          candidate.chainId,
+          candidate.dexId,
+          candidate.pairAddress,
+          candidate.baseTokenAddress,
+          candidate.baseTokenName,
+          candidate.baseTokenSymbol,
+          candidate.quoteTokenSymbol,
+          candidate.url,
+          candidate.priceUsd,
+          candidate.liquidityUsd,
+          candidate.volume24hUsd,
+          candidate.marketCap,
+          candidate.fdv,
+          candidate.pairCreatedAt,
+          candidate.matchScore,
+          JSON.stringify(candidate.riskFlags),
+          JSON.stringify(candidate.matchedTerms),
+          JSON.stringify(candidate.rawPayload),
+          candidate.discoveredAt,
+          candidate.discoveredAt,
+          candidate.discoveredAt
+        );
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  public getDexDiscoveries(options: { minScore: number; limit: number }): DexTokenCandidateRecord[] {
+    const rows = this.dexDiscoveriesStatement.all(options.minScore, options.limit) as Record<string, unknown>[];
+    return rows.map(rowToDexTokenCandidate);
+  }
+
+  public getDexDiscoveryForPost(postId: string): DexTokenCandidateRecord[] {
+    const rows = this.dexDiscoveryForPostStatement.all(postId) as Record<string, unknown>[];
+    return rows.map(rowToDexTokenCandidate);
   }
 
   public getLatestPoll(): PollRunRecord | null {

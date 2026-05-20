@@ -53,6 +53,11 @@
           <strong id="analysisCount">0</strong>
           <small id="lastUpdated">Not refreshed yet</small>
         </article>
+        <article class="metric">
+          <span class="label">DEX matches</span>
+          <strong id="dexCount">0</strong>
+          <small id="dexStateLabel">Discovery not loaded</small>
+        </article>
       </section>
 
       <main class="layout">
@@ -105,6 +110,17 @@
             <span id="signalsState" class="state-pill">Loading</span>
           </div>
           <div id="signalsList" class="card-list"></div>
+        </section>
+
+        <section class="panel wide">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">DEX discovery</p>
+              <h2>Existing token matches</h2>
+            </div>
+            <span id="dexState" class="state-pill">Loading</span>
+          </div>
+          <div id="dexList" class="card-list"></div>
         </section>
 
         <section class="panel wide">

@@ -2,7 +2,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import "dotenv/config";
 
-import { createMemeSignalService } from "./deployment.js";
+import { createDexDiscoveryService, createMemeSignalService } from "./deployment.js";
 import { startApiServer } from "./api.js";
 import { ensureRuntimeDirs, loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
@@ -15,6 +15,7 @@ function printUsage(): void {
   npm run login
   npm run backfill
   npm run poll-once
+  npm run dex-discovery
   npm run worker
   npm run api
   npm run serve`);
@@ -169,6 +170,26 @@ async function runWorkerCommand(withApi: boolean): Promise<void> {
   }
 }
 
+async function runDexDiscoveryCommand(): Promise<void> {
+  const config = loadConfig();
+  ensureRuntimeDirs(config);
+  const logger = createLogger(config.logLevel);
+  const repository = Repository.open(config.databasePath);
+  const service = createDexDiscoveryService(config, repository, logger);
+
+  try {
+    if (!service) {
+      console.log(JSON.stringify({ status: "disabled" }, null, 2));
+      return;
+    }
+
+    const summary = await service.discoverPendingSignals();
+    console.log(JSON.stringify({ status: "success", ...summary }, null, 2));
+  } finally {
+    await repository.close();
+  }
+}
+
 async function runApiCommand(): Promise<void> {
   const config = loadConfig();
   ensureRuntimeDirs(config);
@@ -198,6 +219,9 @@ async function main(): Promise<void> {
       break;
     case "poll-once":
       await runPollOnceCommand();
+      break;
+    case "dex-discovery":
+      await runDexDiscoveryCommand();
       break;
     case "worker":
       await runWorkerCommand(false);
